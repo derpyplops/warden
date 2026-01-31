@@ -8,8 +8,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY server.py client.py analyze.py run.sh ./
-COPY sample.json /data/sample.json
+COPY server.py client.py analyze.py visualize.py run.sh sample.json ./
 
 RUN chmod +x run.sh
 

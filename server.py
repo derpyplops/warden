@@ -103,7 +103,7 @@ def wait_for_trigger(sock: socket.socket) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--json", default="/data/sample.json")
+    parser.add_argument("--json", default="/app/sample.json")
     parser.add_argument("--repeat", type=int, default=1000)
     parser.add_argument("--tamper", action="store_true",
                         help="flip one byte in frame 15 to simulate steganography")

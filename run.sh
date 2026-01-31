@@ -116,3 +116,7 @@ if [ "$result3" -ne 0 ]; then
 else
     echo "  stego detection : FAIL (exfil was not detected!)"
 fi
+echo ""
+echo "══ Generating HTML visualization ══"
+python3 /app/visualize.py
+echo "Open /data/results.html in a browser to view the results."
