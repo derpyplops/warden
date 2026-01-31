@@ -76,8 +76,8 @@ setup_network
 
 echo ""
 echo "══ Test 1: reproducibility (expect PASS) ══"
-run_trial 1
-run_trial 2
+run_trial 1 "" ""
+run_trial 2 "" ""
 
 echo ""
 python3 /app/analyze.py /data/capture_1.pcap /data/capture_2.pcap
