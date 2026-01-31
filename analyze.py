@@ -65,6 +65,9 @@ def normalize(pkt: bytes) -> bytes:
 
     return bytes(buf)
 
+def simple_warden(pkts: list[bytes]):
+    return [normalize(p) for p in pkts]
+
 
 def main() -> None:
     if len(sys.argv) != 3:
@@ -77,8 +80,8 @@ def main() -> None:
     print(f"capture 1: {len(pkts1)} packets")
     print(f"capture 2: {len(pkts2)} packets")
 
-    norm1 = [normalize(p) for p in pkts1]
-    norm2 = [normalize(p) for p in pkts2]
+    norm1 = simple_warden(pkts1)
+    norm2 = simple_warden(pkts2)
 
     h1 = hashlib.sha256(b"".join(norm1)).hexdigest()
     h2 = hashlib.sha256(b"".join(norm2)).hexdigest()
