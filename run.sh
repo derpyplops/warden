@@ -41,15 +41,14 @@ run_trial() {
 
     echo "── trial ${n} ──"
 
-    # Capture on the client's veth — server egress arrives here as ingress.
-    # Filter: UDP only from the server (excludes ARP and the client trigger).
+    # Capture on the client's veth — all UDP traffic (for stego test we need both directions)
     ip netns exec ns_client \
-        tcpdump -i veth-c -w "$pcap" -U --immediate-mode \
-        'udp and src host 10.0.0.1' &
+        tcpdump -i veth-c -w "$pcap" -U --immediate-mode 'udp' &
     local tcpdump_pid=$!
     sleep 1
 
     local server_flags="${2:-}"
+    local client_env="${3:-}"
 
     # Start server (blocks until trigger, sends, exits)
     ip netns exec ns_server python3 /app/server.py $server_flags &
@@ -57,7 +56,7 @@ run_trial() {
     sleep 1
 
     # Client sends trigger and receives response
-    ip netns exec ns_client python3 /app/client.py
+    ip netns exec ns_client env $client_env python3 /app/client.py
 
     # Wait for server to finish sending
     wait "$server_pid" 2>/dev/null || true
@@ -86,10 +85,17 @@ result1=$?
 
 echo ""
 echo "══ Test 2: tamper detection (expect FAIL) ══"
-run_trial 3 "--tamper"
+run_trial 3 "--tamper" ""
 
 echo ""
 python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap && result2=0 || result2=$?
+
+echo ""
+echo "══ Test 3: steganography/exfil detection (expect FAIL) ══"
+run_trial 4 "" "STEGO_MODE=1"
+
+echo ""
+python3 /app/analyze.py /data/capture_1.pcap /data/capture_4.pcap && result3=0 || result3=$?
 
 teardown
 
@@ -104,4 +110,9 @@ if [ "$result2" -ne 0 ]; then
     echo "  tamper detection: PASS (diff detected as expected)"
 else
     echo "  tamper detection: FAIL (tamper was not detected!)"
+fi
+if [ "$result3" -ne 0 ]; then
+    echo "  stego detection : PASS (hidden exfil detected as expected)"
+else
+    echo "  stego detection : FAIL (exfil was not detected!)"
 fi
