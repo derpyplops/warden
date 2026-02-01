@@ -40,6 +40,20 @@ run_trial() {
     local scenario="${2:-1}"  # Default to scenario 1
     local pcap="/data/capture_${n}.pcap"
 
+    # Determine protocol and variant
+    local protocol="UDP"
+    local variant="normal"
+    if [ "$scenario" -eq 2 ]; then
+        variant="tampered"
+    elif [ "$scenario" -ge 3 ]; then
+        protocol="TCP"
+        if [ "$scenario" -eq 4 ]; then
+            variant="tampered"
+        elif [ "$scenario" -eq 5 ]; then
+            variant="steganography"
+        fi
+    fi
+
     echo "── trial ${n} (scenario ${scenario}) ──"
 
     # Capture only packets FROM server (src 10.0.0.1)
@@ -58,7 +72,17 @@ run_trial() {
     sleep 1
 
     # Client sends trigger and receives response with scenario
-    ip netns exec ns_client env SCENARIO=$scenario python3 /app/client.py
+    # Capture output to extract JSON line
+    local client_output=$(ip netns exec ns_client env SCENARIO=$scenario python3 /app/client.py 2>&1)
+    echo "$client_output"
+
+    # Extract JSON line from client output
+    local payload_json=$(echo "$client_output" | grep "PAYLOAD_HASH_JSON:" | sed 's/PAYLOAD_HASH_JSON: //')
+
+    # Parse JSON and add to aggregate file with metadata
+    if [ -n "$payload_json" ]; then
+        python3 /app/augment_hash.py "$payload_json" "$n" "$scenario" "$protocol" "$variant" "$pcap" >> "$HASH_DATA"
+    fi
 
     # Wait for server to finish sending
     wait "$server_pid" 2>/dev/null || true
@@ -73,6 +97,13 @@ run_trial() {
 
 # ── Main ─────────────────────────────────────────────────────────────
 mkdir -p /data
+
+# Initialize hash collection
+RUN_TIMESTAMP=$(date -u +"%Y%m%d_%H%M%S")
+JSON_FILE="/data/run_${RUN_TIMESTAMP}.json"
+HASH_DATA="/tmp/hash_data.jsonl"
+rm -f "$HASH_DATA"
+touch "$HASH_DATA"
 
 setup_network
 
@@ -129,6 +160,11 @@ echo "Same comparison as Test 5, but with IP options zeroed out"
 echo ""
 # Compare with --zero-ip-options flag to defeat steganography detection
 python3 /app/analyze.py --zero-ip-options /data/capture_4.pcap /data/capture_6.pcap | tee /data/test6_analysis.txt && test6_result=0 || test6_result=1
+
+# Aggregate hashes into JSON file
+if [ -f "$HASH_DATA" ]; then
+    python3 /app/collect_hashes.py "$JSON_FILE" < "$HASH_DATA"
+fi
 
 teardown
 

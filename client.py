@@ -220,6 +220,14 @@ def main() -> None:
     h = hashlib.sha256(payload).hexdigest()
     print(f"[client] received {len(payload)} bytes, sha256={h}", flush=True)
 
+    # Output JSON line for run.sh to capture
+    import json as json_module
+    result = {
+        "payload_size": len(payload),
+        "payload_sha256": h
+    }
+    print(f"PAYLOAD_HASH_JSON: {json_module.dumps(result)}", flush=True)
+
 
 if __name__ == "__main__":
     main()
