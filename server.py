@@ -3,11 +3,12 @@ Warden server: precomputes deterministic Ethernet frames from a JSON payload,
 listens for a UDP trigger on an AF_PACKET raw socket, then sends the
 precomputed frames in order based on the scenario specified in the trigger.
 
-Supports 4 scenarios:
+Supports 5 scenarios:
 1. UDP normal response
 2. UDP response with tampered data
 3. TCP normal response
 4. TCP response with tampered data
+5. TCP response with steganographic data in IP padding
 """
 
 import struct
@@ -29,10 +30,16 @@ TCP_SERVER_PORT = 5000
 TCP_CLIENT_PORT = 5001
 MAX_PAYLOAD_UDP = 1472  # 1500 MTU - 20 (IP) - 8 (UDP)
 MAX_PAYLOAD_TCP = 1460  # 1500 MTU - 20 (IP) - 20 (TCP)
+MAX_PAYLOAD_TCP_STEGO = 1452  # 1500 MTU - 28 (IP with options) - 20 (TCP)
 INITIAL_SEQ_SERVER = 1000
 INITIAL_SEQ_CLIENT = 2000
 TCP_WINDOW = 65535
 TAMPER_OFFSET = 50  # Offset in the payload to tamper
+
+# Scenario 5: Steganography via IP padding
+STEG_MESSAGE = b"SECRET"  # Message to hide in IP padding
+STEG_FRAMES_START = 10    # Start hiding message in frame 10
+STEG_BYTES_PER_FRAME = 1  # Hide 1 byte per frame
 
 
 def tamper_payload(payload: bytes, offset: int = TAMPER_OFFSET) -> bytes:
@@ -76,6 +83,75 @@ def build_tcp_data_frame(ip_id: int, seq: int, dport: int, chunk: bytes) -> byte
     return bytes(pkt)
 
 
+def build_tcp_data_frame_with_stego(ip_id: int, seq: int, dport: int, chunk: bytes, stego_byte: int) -> bytes:
+    """Build TCP data frame with steganographic data in IP padding
+
+    Args:
+        ip_id: IP identification number
+        seq: TCP sequence number
+        dport: Destination port
+        chunk: Payload data
+        stego_byte: Byte value to hide in IP option padding
+
+    Returns:
+        Raw Ethernet frame bytes
+    """
+    # Build the base packet without options
+    pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
+          IP(src=SERVER_IP, dst=CLIENT_IP, id=ip_id, flags="DF") / \
+          TCP(sport=TCP_SERVER_PORT, dport=dport,
+              flags="PA", seq=seq,
+              ack=INITIAL_SEQ_CLIENT + 1,
+              window=TCP_WINDOW) / \
+          Raw(load=chunk)
+
+    # Convert to bytes and manually add IP options with steganographic data
+    frame = bytearray(bytes(pkt))
+
+    # IP header starts at byte 14 (after Ethernet)
+    ip_start = 14
+
+    # Standard IP header is 20 bytes, we'll extend it with 8 bytes of options
+    # Current structure: Eth(14) + IP(20) + TCP(20+) + Data
+    # New structure:     Eth(14) + IP(20) + Options(8) + TCP(20+) + Data
+
+    # IP options (8 bytes): NOP(1) NOP(1) NOP(1) STEGO(1) NOP(1) NOP(1) NOP(1) NOP(1)
+    # NOP option type = 0x01
+    ip_options = bytes([0x01, 0x01, 0x01, stego_byte, 0x01, 0x01, 0x01, 0x01])
+
+    # Extract IP header and update it
+    ip_header = bytearray(frame[ip_start:ip_start + 20])
+
+    # Update IHL (bits 0-3 of first byte): change from 5 to 7 (28 bytes total / 4)
+    ip_header[0] = (ip_header[0] & 0xF0) | 0x07
+
+    # Update total length (bytes 2-3): add 8 bytes for options
+    total_len = struct.unpack("!H", ip_header[2:4])[0]
+    new_total_len = total_len + 8
+    ip_header[2:4] = struct.pack("!H", new_total_len)
+
+    # Zero out checksum for recalculation
+    ip_header[10:12] = bytes([0, 0])
+
+    # Recalculate checksum over the modified header (without options)
+    checksum = 0
+    for i in range(0, 20, 2):
+        checksum += struct.unpack("!H", ip_header[i:i+2])[0]
+    while checksum >> 16:
+        checksum = (checksum & 0xFFFF) + (checksum >> 16)
+    checksum = (~checksum) & 0xFFFF
+    ip_header[10:12] = struct.pack("!H", checksum)
+
+    # Build new frame with options inserted
+    new_frame = bytearray()
+    new_frame.extend(frame[:ip_start])               # Ethernet header
+    new_frame.extend(ip_header)                      # Modified IP header
+    new_frame.extend(ip_options)                     # IP options
+    new_frame.extend(frame[ip_start + 20:])          # TCP header and payload
+
+    return bytes(new_frame)
+
+
 def build_tcp_fin_ack(dport: int, seq: int, ack: int) -> bytes:
     """Server closes connection with FIN+ACK"""
     pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
@@ -116,10 +192,51 @@ def precompute_tcp_frames(payload: bytes, client_dport: int) -> list[bytes]:
     return frames
 
 
+def precompute_tcp_frames_with_stego(payload: bytes, client_dport: int) -> list[bytes]:
+    """Precompute TCP data frames with steganographic IP padding
+
+    Distributes STEG_MESSAGE across frames starting at STEG_FRAMES_START.
+    Each frame hides one byte of the message in IP option padding.
+    """
+    frames = []
+    offset = 0
+    ip_id = 1
+    seq = INITIAL_SEQ_SERVER + 1  # After SYN-ACK
+    frame_num = 0
+    steg_byte_idx = 0
+
+    while offset < len(payload):
+        # Determine if this frame should carry steganographic data
+        is_stego_frame = (frame_num >= STEG_FRAMES_START and
+                         steg_byte_idx < len(STEG_MESSAGE))
+
+        # Use smaller payload size for frames with options to stay under MTU
+        max_payload = MAX_PAYLOAD_TCP_STEGO if is_stego_frame else MAX_PAYLOAD_TCP
+        chunk = payload[offset : offset + max_payload]
+
+        if is_stego_frame:
+            # Hide one byte of secret message
+            stego_byte = STEG_MESSAGE[steg_byte_idx]
+            frames.append(build_tcp_data_frame_with_stego(
+                ip_id, seq, client_dport, chunk, stego_byte
+            ))
+            steg_byte_idx += 1
+        else:
+            # Normal frame without steganography
+            frames.append(build_tcp_data_frame(ip_id, seq, client_dport, chunk))
+
+        offset += max_payload
+        seq += len(chunk)
+        ip_id += 1
+        frame_num += 1
+
+    return frames
+
+
 def parse_trigger_json(pkt) -> int:
     """
     Extract scenario from UDP trigger JSON payload using Scapy.
-    Returns scenario number (1-4), defaults to 1 if invalid.
+    Returns scenario number (1-5), defaults to 1 if invalid.
     """
     try:
         # Parse with Scapy to handle variable headers safely
@@ -133,7 +250,7 @@ def parse_trigger_json(pkt) -> int:
         scenario = data.get("scenario", 1)
 
         # Validate scenario is in range
-        if isinstance(scenario, int) and 1 <= scenario <= 4:
+        if isinstance(scenario, int) and 1 <= scenario <= 5:
             return scenario
         else:
             print(f"[server] invalid scenario {scenario}, defaulting to 1", flush=True)
@@ -327,6 +444,42 @@ def handle_scenario_4(payload: bytes, sock: socket.socket, client_sport: int) ->
     time.sleep(0.1)
 
 
+def handle_scenario_5(payload: bytes, sock: socket.socket, client_sport: int) -> None:
+    """TCP response with steganographic data in IP padding
+
+    Normal TCP connection but with secret message hidden in IP option padding
+    bytes. This demonstrates covert channel detection.
+    """
+    print(f"[server] scenario 5: waiting for TCP SYN ...", flush=True)
+    client_dport = wait_for_tcp_syn(sock, client_sport)
+
+    # Send SYN-ACK (normal, no steganography in handshake)
+    syn_ack = build_tcp_syn_ack(client_dport)
+    sock.sendto(syn_ack, (IFACE, 0))
+    print(f"[server] scenario 5: sent SYN-ACK", flush=True)
+
+    # Wait for ACK
+    if not wait_for_tcp_ack(sock, client_dport):
+        print(f"[server] scenario 5: timeout waiting for ACK", flush=True)
+        return
+
+    print(f"[server] scenario 5: received ACK, sending TCP data frames with IP padding steganography", flush=True)
+    print(f"[server] scenario 5: hiding message '{STEG_MESSAGE.decode()}' in IP padding", flush=True)
+
+    # Build and send frames with steganographic IP padding
+    frames = precompute_tcp_frames_with_stego(payload, client_dport)
+    for frame in frames:
+        sock.sendto(frame, (IFACE, 0))
+
+    # Send FIN-ACK
+    last_seq = INITIAL_SEQ_SERVER + 1 + len(payload)
+    fin_ack = build_tcp_fin_ack(client_dport, last_seq, INITIAL_SEQ_CLIENT + 1)
+    sock.sendto(fin_ack, (IFACE, 0))
+    print(f"[server] scenario 5: sent FIN-ACK", flush=True)
+
+    time.sleep(0.1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", default="/app/sample.json")
@@ -355,6 +508,8 @@ def main() -> None:
         handle_scenario_3(response_bytes, sock, client_sport)
     elif scenario == 4:
         handle_scenario_4(response_bytes, sock, client_sport)
+    elif scenario == 5:
+        handle_scenario_5(response_bytes, sock, client_sport)
     else:
         print(f"[server] unknown scenario {scenario}, defaulting to 1", flush=True)
         handle_scenario_1(response_bytes, sock)

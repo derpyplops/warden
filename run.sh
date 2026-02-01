@@ -111,6 +111,16 @@ echo "════════════════════════�
 run_trial 5 4
 test4_result=0
 
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 5: TCP Steganography Detection (Scenario 3 vs 5)"
+echo "════════════════════════════════════════════════════════════════"
+run_trial 6 5
+
+echo ""
+# Compare scenario 3 (normal TCP) vs scenario 5 (TCP with IP padding stego)
+python3 /app/analyze.py /data/capture_4.pcap /data/capture_6.pcap | tee /data/test5_analysis.txt && test5_result=0 || test5_result=1
+
 teardown
 
 echo ""
@@ -160,6 +170,14 @@ else
     echo "✗ Test 4: TCP Scenario 4 - FAIL" >> /data/results_summary.txt
 fi
 
+if [ "$test5_result" -eq 1 ]; then
+    echo "✓ Test 5: TCP Steganography Detection - PASS (difference detected)"
+    echo "✓ Test 5: TCP Steganography Detection - PASS (difference detected)" >> /data/results_summary.txt
+else
+    echo "✗ Test 5: TCP Steganography Detection - FAIL"
+    echo "✗ Test 5: TCP Steganography Detection - FAIL" >> /data/results_summary.txt
+fi
+
 {
     echo ""
     echo "════════════════════════════════════════════════════════════════"
@@ -174,6 +192,11 @@ fi
     echo "--- Test 2: UDP Tamper Detection Analysis ---"
     echo ""
     cat /data/test2_analysis.txt
+    echo ""
+    echo ""
+    echo "--- Test 5: TCP Steganography Detection Analysis ---"
+    echo ""
+    cat /data/test5_analysis.txt
 } >> /data/results_summary.txt
 
 echo ""

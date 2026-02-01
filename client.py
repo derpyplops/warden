@@ -2,11 +2,12 @@
 Warden client: sends a UDP trigger to the server with a scenario field,
 then receives the response (either UDP or TCP based on the scenario).
 
-Supports 4 scenarios:
+Supports 5 scenarios:
 1. UDP normal response
 2. UDP response with tampered data
 3. TCP normal response
 4. TCP response with tampered data
+5. TCP response with steganographic data in IP padding
 """
 
 import socket
@@ -193,7 +194,7 @@ def main() -> None:
         payload = receive_udp_response(sock)
         sock.close()
 
-    elif SCENARIO in [3, 4]:
+    elif SCENARIO in [3, 4, 5]:
         # TCP scenarios: send trigger via UDP, then use raw socket for TCP
         print("[client] using TCP", flush=True)
 

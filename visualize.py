@@ -259,6 +259,13 @@ def main():
             "/data/capture_5.pcap",
             "PASS",
         ),
+        (
+            "Test 5: TCP Steganography Detection",
+            "TCP with secret message hidden in IP option padding (scenario 5) vs normal TCP (scenario 3). Should detect covert channel.",
+            "/data/capture_4.pcap",
+            "/data/capture_6.pcap",
+            "FAIL",
+        ),
     ]
 
     for test_name, test_desc, cap1, cap2, expected in tests:
