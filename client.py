@@ -7,8 +7,6 @@ Supports 4 scenarios:
 2. UDP response with tampered data
 3. TCP normal response
 4. TCP response with tampered data
-
-Set SCENARIO=<1-4> to control which scenario to test.
 """
 
 import socket
@@ -16,12 +14,14 @@ import json
 import hashlib
 import os
 import struct
+import time
 from scapy.all import Ether, IP, UDP, TCP, Raw
 
 SERVER_IP = "10.0.0.1"
 CLIENT_IP = "10.0.0.2"
 UDP_PORT = 5000
-TCP_PORT = 5000
+TCP_SERVER_PORT = 5000
+TCP_CLIENT_PORT = 5001
 RECV_TIMEOUT = 3  # seconds
 IFACE = "veth-c"
 
@@ -41,13 +41,11 @@ def create_raw_socket() -> socket.socket:
     return sock
 
 
-
-
 def build_tcp_syn() -> bytes:
     """Client initiates TCP connection with SYN"""
     pkt = Ether(dst=SERVER_MAC, src=CLIENT_MAC) / \
           IP(src=CLIENT_IP, dst=SERVER_IP, id=0, flags="DF") / \
-          TCP(sport=TCP_PORT, dport=TCP_PORT,
+          TCP(sport=TCP_CLIENT_PORT, dport=TCP_SERVER_PORT,
               flags="S", seq=INITIAL_SEQ_CLIENT,
               window=TCP_WINDOW)
     return bytes(pkt)
@@ -57,7 +55,7 @@ def build_tcp_ack(server_seq: int) -> bytes:
     """Client ACKs server's SYN-ACK"""
     pkt = Ether(dst=SERVER_MAC, src=CLIENT_MAC) / \
           IP(src=CLIENT_IP, dst=SERVER_IP, id=0, flags="DF") / \
-          TCP(sport=TCP_PORT, dport=TCP_PORT,
+          TCP(sport=TCP_CLIENT_PORT, dport=TCP_SERVER_PORT,
               flags="A", seq=INITIAL_SEQ_CLIENT + 1,
               ack=server_seq + 1,
               window=TCP_WINDOW)
@@ -68,7 +66,7 @@ def build_tcp_fin_ack(seq: int, ack: int) -> bytes:
     """Client closes connection"""
     pkt = Ether(dst=SERVER_MAC, src=CLIENT_MAC) / \
           IP(src=CLIENT_IP, dst=SERVER_IP, id=0, flags="DF") / \
-          TCP(sport=TCP_PORT, dport=TCP_PORT,
+          TCP(sport=TCP_CLIENT_PORT, dport=TCP_SERVER_PORT,
               flags="FA", seq=seq, ack=ack,
               window=TCP_WINDOW)
     return bytes(pkt)
@@ -80,54 +78,98 @@ def receive_udp_response(sock: socket.socket) -> bytes:
     sock.settimeout(RECV_TIMEOUT)
     try:
         while True:
-            frame, _ = sock.recvfrom(65535)
-            chunks.append(frame)
+            data, _ = sock.recvfrom(65535)
+            chunks.append(data)
     except socket.timeout:
         pass
     return b"".join(chunks)
 
 
-def receive_tcp_response(sock: socket.socket) -> bytes:
+def receive_tcp_response(raw_sock: socket.socket) -> bytes:
     """Handle TCP handshake and receive data"""
     # Send SYN
-    sock.send(build_tcp_syn())
+    raw_sock.send(build_tcp_syn())
     print("[client] sent TCP SYN", flush=True)
 
     # Wait for SYN-ACK
-    syn_ack_pkt = sock.recv(65535)
-    # Extract server's seq number from TCP header
-    # Skip Ethernet (14) + IP header (variable, IHL*4), then TCP seq at offset 4-7
-    if len(syn_ack_pkt) > 14:
-        ihl = (syn_ack_pkt[14] & 0x0F) * 4
-        tcp_offset = 14 + ihl
-        if len(syn_ack_pkt) >= tcp_offset + 8:
-            server_seq = struct.unpack("!I", syn_ack_pkt[tcp_offset + 4:tcp_offset + 8])[0]
-        else:
-            server_seq = 0
-    else:
-        server_seq = 0
-    print(f"[client] received SYN-ACK with seq={server_seq}", flush=True)
+    raw_sock.settimeout(RECV_TIMEOUT)
+    server_seq = None
+    max_attempts = 20
+
+    for attempt in range(max_attempts):
+        try:
+            frame = raw_sock.recv(65535)
+            pkt = Ether(frame)
+
+            # Validate packet structure
+            if IP not in pkt or TCP not in pkt:
+                continue
+
+            ip_pkt = pkt[IP]
+            tcp_pkt = pkt[TCP]
+
+            # Check source/dest match
+            if ip_pkt.src != SERVER_IP or ip_pkt.dst != CLIENT_IP:
+                continue
+
+            if tcp_pkt.sport != TCP_SERVER_PORT or tcp_pkt.dport != TCP_CLIENT_PORT:
+                continue
+
+            # Check for SYN-ACK flags
+            if not (tcp_pkt.flags & 0x02):  # SYN flag required
+                continue
+            if not (tcp_pkt.flags & 0x10):  # ACK flag required
+                continue
+
+            server_seq = tcp_pkt.seq
+            print(f"[client] received SYN-ACK with seq={server_seq}", flush=True)
+            break
+
+        except Exception:
+            continue
+
+    if server_seq is None:
+        print("[client] timeout waiting for SYN-ACK", flush=True)
+        return b""
 
     # Send ACK
-    sock.send(build_tcp_ack(server_seq))
+    raw_sock.send(build_tcp_ack(server_seq))
     print("[client] sent TCP ACK", flush=True)
 
     # Receive data frames
     chunks = []
-    sock.settimeout(RECV_TIMEOUT)
+    client_ack = INITIAL_SEQ_CLIENT + 1
+
     try:
         while True:
-            frame = sock.recv(65535)
-            # Check if it's TCP (protocol byte 23 = 6)
-            if len(frame) > 42 and frame[23] == 6:
-                tcp_flags = frame[47]  # TCP flags byte
-                # Extract payload (skip Eth 14 + IP 20 + TCP 20 = 54)
-                if len(frame) > 54:
-                    chunks.append(frame[54:])
-                # Check for FIN flag (0x01)
-                if tcp_flags & 0x01:
-                    print("[client] received FIN, closing connection", flush=True)
-                    break
+            frame = raw_sock.recv(65535)
+            pkt = Ether(frame)
+
+            # Validate packet structure
+            if IP not in pkt or TCP not in pkt:
+                continue
+
+            ip_pkt = pkt[IP]
+            tcp_pkt = pkt[TCP]
+
+            # Check source/dest match
+            if ip_pkt.src != SERVER_IP or ip_pkt.dst != CLIENT_IP:
+                continue
+
+            if tcp_pkt.sport != TCP_SERVER_PORT or tcp_pkt.dport != TCP_CLIENT_PORT:
+                continue
+
+            # Extract payload if present
+            if Raw in pkt:
+                payload = bytes(pkt[Raw].load)
+                chunks.append(payload)
+                client_ack = tcp_pkt.seq + len(payload)
+
+            # Check for FIN flag
+            if tcp_pkt.flags & 0x01:  # FIN flag
+                print("[client] received FIN, closing connection", flush=True)
+                break
+
     except socket.timeout:
         pass
 
@@ -155,12 +197,15 @@ def main() -> None:
         # TCP scenarios: send trigger via UDP, then use raw socket for TCP
         print("[client] using TCP", flush=True)
 
-        # Send trigger via normal UDP socket (won't be captured by tcpdump filter)
+        # Send trigger via normal UDP socket
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.bind((CLIENT_IP, UDP_PORT))
         udp_sock.sendto(trigger_data, (SERVER_IP, UDP_PORT))
         print("[client] trigger sent (via UDP socket)", flush=True)
         udp_sock.close()
+
+        # Small delay to let server process trigger
+        time.sleep(0.05)
 
         # Then do TCP handshake and receive via raw socket
         raw_sock = create_raw_socket()
