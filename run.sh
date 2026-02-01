@@ -42,9 +42,10 @@ run_trial() {
 
     echo "── trial ${n} (scenario ${scenario}) ──"
 
-    # Capture on the client's veth all traffic from server to client
-    # This includes UDP responses and TCP handshake/data packets
-    local filter="src 10.0.0.1 and dst 10.0.0.2"
+    # Capture only packets FROM server (src 10.0.0.1)
+    # This includes UDP responses and TCP handshake/data (SYN-ACK, data, FIN-ACK)
+    # Excludes outgoing trigger packets from client
+    local filter="src 10.0.0.1"
 
     ip netns exec ns_client \
         tcpdump -i veth-c -w "$pcap" -U --immediate-mode "$filter" &
@@ -83,7 +84,7 @@ run_trial 1 1
 run_trial 2 1
 
 echo ""
-python3 /app/analyze.py /data/capture_1.pcap /data/capture_2.pcap
+python3 /app/analyze.py /data/capture_1.pcap /data/capture_2.pcap | tee /data/test1_analysis.txt
 test1_result=$?
 
 echo ""
@@ -94,7 +95,7 @@ run_trial 3 2
 
 echo ""
 # Test 2 PASSES if analyze.py detects difference (exit code 1)
-python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap && test2_result=0 || test2_result=1
+python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap | tee /data/test2_analysis.txt && test2_result=0 || test2_result=1
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
@@ -117,29 +118,63 @@ echo "════════════════════════�
 echo "SUMMARY"
 echo "════════════════════════════════════════════════════════════════"
 
+# Create summary file
+{
+    echo "════════════════════════════════════════════════════════════════"
+    echo "WARDEN TEST RESULTS"
+    echo "════════════════════════════════════════════════════════════════"
+    echo ""
+    echo "Test Results:"
+    echo ""
+} > /data/results_summary.txt
+
 if [ "$test1_result" -eq 0 ]; then
     echo "✓ Test 1: UDP Reproducibility - PASS"
+    echo "✓ Test 1: UDP Reproducibility - PASS" >> /data/results_summary.txt
 else
     echo "✗ Test 1: UDP Reproducibility - FAIL"
+    echo "✗ Test 1: UDP Reproducibility - FAIL" >> /data/results_summary.txt
 fi
 
 if [ "$test2_result" -eq 1 ]; then
     echo "✓ Test 2: UDP Tamper Detection - PASS (difference detected)"
+    echo "✓ Test 2: UDP Tamper Detection - PASS (difference detected)" >> /data/results_summary.txt
 else
     echo "✗ Test 2: UDP Tamper Detection - FAIL"
+    echo "✗ Test 2: UDP Tamper Detection - FAIL" >> /data/results_summary.txt
 fi
 
 if [ "$test3_result" -eq 0 ]; then
     echo "✓ Test 3: TCP Scenario 3 - PASS"
+    echo "✓ Test 3: TCP Scenario 3 - PASS" >> /data/results_summary.txt
 else
     echo "✗ Test 3: TCP Scenario 3 - FAIL"
+    echo "✗ Test 3: TCP Scenario 3 - FAIL" >> /data/results_summary.txt
 fi
 
 if [ "$test4_result" -eq 0 ]; then
     echo "✓ Test 4: TCP Scenario 4 - PASS"
+    echo "✓ Test 4: TCP Scenario 4 - PASS" >> /data/results_summary.txt
 else
     echo "✗ Test 4: TCP Scenario 4 - FAIL"
+    echo "✗ Test 4: TCP Scenario 4 - FAIL" >> /data/results_summary.txt
 fi
+
+{
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "ANALYSIS DETAILS"
+    echo "════════════════════════════════════════════════════════════════"
+    echo ""
+    echo "--- Test 1: UDP Reproducibility Analysis ---"
+    echo ""
+    cat /data/test1_analysis.txt
+    echo ""
+    echo ""
+    echo "--- Test 2: UDP Tamper Detection Analysis ---"
+    echo ""
+    cat /data/test2_analysis.txt
+} >> /data/results_summary.txt
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
