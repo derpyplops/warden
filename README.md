@@ -5,6 +5,7 @@ A deterministic network packet transmission and analysis system for testing repr
 ## Overview
 
 Warden is a server-client system that:
+
 - Precomputes deterministic Ethernet frames from JSON payloads
 - Sends frames via raw sockets in isolated network namespaces
 - Captures and analyzes packet streams to verify reproducibility
@@ -76,3 +77,54 @@ sudo bash run.sh
 - Python 3.9+
 - tcpdump
 - Root privileges (for network operations)
+
+## How to Contribute
+
+### Development Workflow
+
+1.  **Environment**: All development and testing should be performed within the Docker container to ensure reproducible network conditions (namespaces, veth pairs).
+2.  **Code Changes**: Modify the Python scripts (`server.py`, `client.py`, `analyze.py`) locally.
+3.  **Verification**: Re-build and run the container to verify changes.
+
+### Running the Test Suite
+
+The `run.sh` script is the single source of truth for verification. It orchestrates network setup, runs scenarios, captures traffic, and performs analysis.
+
+To run the full suite and export results to your local `data/` directory:
+
+```bash
+# Build the image
+docker build -t warden .
+
+# Run tests with volume mount
+docker run --privileged --rm -v $(pwd)/data:/data warden ./run.sh
+```
+
+### Analyzing Results
+
+The test suite generates several artifacts in the `data/` directory:
+
+1.  **`results_summary.txt`**: High-level pass/fail status and detailed Timing Analysis reports.
+2.  **`results.html`**: A visual packet-by-packet comparison of traffic captures.
+3.  **`capture_*.pcap`**: Raw PCAP files for each test trial.
+
+### Special Features: Timing & Covert Channels
+
+We support accurate timing analysis for detecting and mitigating covert channels.
+
+**Timing Analysis (`analyze.py`)**:
+
+- Use `--timing-analysis` to analyze Inter-Packet Delays (IPD).
+- Calculates statistical variance and estimates covert channel bandwidth (bps).
+
+**Comparative Analysis**:
+
+- `analyze.py` can compare two captures (e.g., Vulnerable vs Secure) to quantify latency overhead and throughput impact.
+- This is automatically run as part of `run.sh` (Tests 7 & 8).
+
+**Manual Timing Verification Command**:
+
+```bash
+# Within the container or if you have the pcaps locally:
+python3 analyze.py --timing-analysis data/capture_7.pcap data/capture_8.pcap
+```
