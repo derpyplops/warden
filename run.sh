@@ -121,6 +121,15 @@ echo ""
 # Compare scenario 3 (normal TCP) vs scenario 5 (TCP with IP padding stego)
 python3 /app/analyze.py /data/capture_4.pcap /data/capture_6.pcap | tee /data/test5_analysis.txt && test5_result=0 || test5_result=1
 
+echo ""
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 6: Steganography Defeated by IP Options Zeroing"
+echo "════════════════════════════════════════════════════════════════"
+echo "Same comparison as Test 5, but with IP options zeroed out"
+echo ""
+# Compare with --zero-ip-options flag to defeat steganography detection
+python3 /app/analyze.py --zero-ip-options /data/capture_4.pcap /data/capture_6.pcap | tee /data/test6_analysis.txt && test6_result=0 || test6_result=1
+
 teardown
 
 echo ""
@@ -178,6 +187,14 @@ else
     echo "✗ Test 5: TCP Steganography Detection - FAIL" >> /data/results_summary.txt
 fi
 
+if [ "$test6_result" -eq 1 ]; then
+    echo "✓ Test 6: Steganography Defeated by IP Options Zeroing - PASS (hidden data destroyed)"
+    echo "✓ Test 6: Steganography Defeated by IP Options Zeroing - PASS (hidden data destroyed)" >> /data/results_summary.txt
+else
+    echo "✗ Test 6: Steganography Defeated by IP Options Zeroing - FAIL (packets still differ)"
+    echo "✗ Test 6: Steganography Defeated by IP Options Zeroing - FAIL (packets still differ)" >> /data/results_summary.txt
+fi
+
 {
     echo ""
     echo "════════════════════════════════════════════════════════════════"
@@ -197,6 +214,11 @@ fi
     echo "--- Test 5: TCP Steganography Detection Analysis ---"
     echo ""
     cat /data/test5_analysis.txt
+    echo ""
+    echo ""
+    echo "--- Test 6: Steganography Defeated by IP Options Zeroing ---"
+    echo ""
+    cat /data/test6_analysis.txt
 } >> /data/results_summary.txt
 
 echo ""

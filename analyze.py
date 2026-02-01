@@ -1,11 +1,13 @@
 """
 Compare two pcap files after normalizing volatile fields.
 Zeroes out: IP identification, IP header checksum, UDP checksum.
+Optional: Zero IP options/padding to defeat steganography detection.
 """
 
 import struct
 import hashlib
 import sys
+from scapy.all import Ether, IP, UDP, TCP
 
 
 def read_pcap(path: str) -> list[bytes]:
@@ -66,12 +68,35 @@ def extract_tcp_payload(pkt: bytes) -> bytes:
     return pkt[payload_start:]
 
 
-def normalize(pkt: bytes) -> bytes:
+def normalize(pkt: bytes, zero_ip_options: bool = False) -> bytes:
+    """Normalize packet by zeroing volatile fields using Scapy for parsing.
+
+    Args:
+        pkt: Raw packet bytes
+        zero_ip_options: If True, zero out IP options/padding area (defeats steganography)
+
+    Returns:
+        Normalized packet bytes
+    """
     if len(pkt) < 34:
         return pkt
 
     buf = bytearray(pkt)
 
+    # Use Scapy to parse and understand the packet structure
+    try:
+        eth_pkt = Ether(pkt)
+    except Exception:
+        # If Scapy can't parse, just do basic checks
+        ethertype = struct.unpack("!H", buf[12:14])[0]
+        if ethertype != 0x0800:
+            return bytes(buf)
+    else:
+        # Scapy successfully parsed - use its information
+        if IP not in eth_pkt:
+            return bytes(buf)
+
+    # Ethertype check
     ethertype = struct.unpack("!H", buf[12:14])[0]
     if ethertype != 0x0800:
         return bytes(buf)
@@ -88,6 +113,33 @@ def normalize(pkt: bytes) -> bytes:
 
     ihl = (buf[ip] & 0x0F) * 4
     proto = buf[ip + 9]
+
+    # Zero IP options if requested (defeat steganography)
+    # This removes the IP options entirely, making the presence of steganography undetectable
+    if zero_ip_options and ihl > 20:
+        # Remove the IP options by reconstructing the packet without them
+        eth_and_ip = buf[:ip + 20]  # Ethernet + IP header (without options)
+        rest = buf[ip + ihl:]        # Everything after IP header
+
+        # Rebuild buffer without IP options
+        buf = bytearray(eth_and_ip + rest)
+
+        # Update IP header fields
+        # Set IHL to 5 (standard 20-byte header)
+        buf[ip] = (buf[ip] & 0xF0) | 0x05
+
+        # Update total length to remove option bytes
+        options_removed = ihl - 20
+        total_len = struct.unpack("!H", buf[ip + 2:ip + 4])[0]
+        new_total_len = total_len - options_removed
+        buf[ip + 2:ip + 4] = struct.pack("!H", new_total_len)
+
+        # Zero the checksum since it will change
+        buf[ip + 10:ip + 12] = bytes([0, 0])
+
+        # Re-parse for the rest of the function to work correctly
+        ihl = 20
+        proto = buf[ip + 9]
 
     # Zero UDP checksum (offset 6-7 of UDP header)
     if proto == 17 and len(buf) >= ip + ihl + 8:
@@ -124,28 +176,45 @@ def is_data_frame(pkt: bytes) -> bool:
     return False
 
 
-def simple_warden(pkts: list[bytes]):
+def simple_warden(pkts: list[bytes], zero_ip_options: bool = False):
     # Filter to only data frames (skip TCP control packets)
     data_frames = [p for p in pkts if is_data_frame(p)]
-    return [normalize(p) for p in data_frames]
+    return [normalize(p, zero_ip_options=zero_ip_options) for p in data_frames]
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        print(f"usage: {sys.argv[0]} <cap1.pcap> <cap2.pcap>")
+    # Parse arguments
+    zero_ip_options = False
+    cap1_path = None
+    cap2_path = None
+
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--zero-ip-options":
+            zero_ip_options = True
+        elif cap1_path is None:
+            cap1_path = arg
+        elif cap2_path is None:
+            cap2_path = arg
+
+    if cap1_path is None or cap2_path is None:
+        print(f"usage: {sys.argv[0]} [--zero-ip-options] <cap1.pcap> <cap2.pcap>")
+        print(f"")
+        print(f"  --zero-ip-options: Zero out IP options/padding (defeats steganography detection)")
         sys.exit(2)
 
-    pkts1 = read_pcap(sys.argv[1])
-    pkts2 = read_pcap(sys.argv[2])
+    pkts1 = read_pcap(cap1_path)
+    pkts2 = read_pcap(cap2_path)
 
     print(f"capture 1: {len(pkts1)} packets")
     print(f"capture 2: {len(pkts2)} packets")
 
-    norm1 = simple_warden(pkts1)
-    norm2 = simple_warden(pkts2)
+    norm1 = simple_warden(pkts1, zero_ip_options=zero_ip_options)
+    norm2 = simple_warden(pkts2, zero_ip_options=zero_ip_options)
 
     print(f"capture 1: {len(norm1)} data frames after filtering")
     print(f"capture 2: {len(norm2)} data frames after filtering")
+    if zero_ip_options:
+        print(f"[IP options zeroed - steganography detection defeated]")
 
     h1 = hashlib.sha256(b"".join(norm1)).hexdigest()
     h2 = hashlib.sha256(b"".join(norm2)).hexdigest()
