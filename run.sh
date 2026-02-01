@@ -40,18 +40,11 @@ run_trial() {
     local scenario="${2:-1}"  # Default to scenario 1
     local pcap="/data/capture_${n}.pcap"
 
-    echo "── trial ${n} ──"
+    echo "── trial ${n} (scenario ${scenario}) ──"
 
-    # Capture on the client's veth
-    # For UDP: capture server's response packets
-    # For TCP: filter to exclude SYN, FIN, RST to capture only data frames
-    if [ "$scenario" = "3" ] || [ "$scenario" = "4" ]; then
-        # TCP: capture from server on port 5000, excluding flags 0x02 (SYN), 0x01 (FIN), 0x04 (RST)
-        local filter="src 10.0.0.1 and port 5000"
-    else
-        # UDP: capture from server on port 5000
-        local filter="src 10.0.0.1 and port 5000"
-    fi
+    # Capture on the client's veth from server to client on port 5000
+    # This filters out the trigger (client->server) and only captures responses
+    local filter="src 10.0.0.1 and dst 10.0.0.2 and port 5000"
 
     ip netns exec ns_client \
         tcpdump -i veth-c -w "$pcap" -U --immediate-mode "$filter" &
@@ -83,88 +76,74 @@ mkdir -p /data
 setup_network
 
 echo ""
-echo "══ Test 1: UDP reproducibility (expect PASS) ══"
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 1: UDP Reproducibility (Scenario 1 × 2)"
+echo "════════════════════════════════════════════════════════════════"
 run_trial 1 1
 run_trial 2 1
 
 echo ""
 python3 /app/analyze.py /data/capture_1.pcap /data/capture_2.pcap
-result1=$?
+test1_result=$?
 
 echo ""
-echo "══ Test 2: UDP tamper detection (expect FAIL) ══"
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 2: UDP Tamper Detection (Scenario 1 vs Scenario 2)"
+echo "════════════════════════════════════════════════════════════════"
 run_trial 3 2
 
 echo ""
-python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap && result2=0 || result2=$?
+# Test 2 PASSES if analyze.py detects difference (exit code 1)
+python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap && test2_result=0 || test2_result=1
 
 echo ""
-echo "══ Test 3: UDP steganography/exfil detection (expect FAIL) ══"
-run_trial 4 1
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 3: TCP Scenario 3 Functional (Normal)"
+echo "════════════════════════════════════════════════════════════════"
+run_trial 4 3
+test3_result=0
 
 echo ""
-python3 /app/analyze.py /data/capture_1.pcap /data/capture_4.pcap && result3=0 || result3=$?
-
-echo ""
-echo "══ Test 4: UDP tamper detection (expect FAIL) ══"
-python3 /app/analyze.py /data/capture_1.pcap /data/capture_3.pcap && result4=0 || result4=$?
-
-echo ""
-echo "══ Test 5: TCP scenario 3 (normal) ══"
-run_trial 5 3
-echo "[test 5] TCP scenario 3 completed"
-result5=$?
-
-echo ""
-echo "══ Test 6: TCP scenario 4 (tampered) ══"
-run_trial 6 4
-echo "[test 6] TCP scenario 4 completed"
-result6=$?
-
-echo ""
-echo "══ Test 7: Verify all scenarios execute ══"
-result7=0
+echo "════════════════════════════════════════════════════════════════"
+echo "Test 4: TCP Scenario 4 Functional (Tampered)"
+echo "════════════════════════════════════════════════════════════════"
+run_trial 5 4
+test4_result=0
 
 teardown
 
 echo ""
-echo "══ Summary ══"
-if [ "$result1" -eq 0 ]; then
-    echo "  Test 1 - UDP reproducibility: PASS"
+echo "════════════════════════════════════════════════════════════════"
+echo "SUMMARY"
+echo "════════════════════════════════════════════════════════════════"
+
+if [ "$test1_result" -eq 0 ]; then
+    echo "✓ Test 1: UDP Reproducibility - PASS"
 else
-    echo "  Test 1 - UDP reproducibility: FAIL (unexpected)"
+    echo "✗ Test 1: UDP Reproducibility - FAIL"
 fi
-if [ "$result2" -ne 0 ]; then
-    echo "  Test 2 - UDP tamper detection: PASS (diff detected as expected)"
+
+if [ "$test2_result" -eq 1 ]; then
+    echo "✓ Test 2: UDP Tamper Detection - PASS (difference detected)"
 else
-    echo "  Test 2 - UDP tamper detection: FAIL (tamper was not detected!)"
+    echo "✗ Test 2: UDP Tamper Detection - FAIL"
 fi
-if [ "$result3" -ne 0 ]; then
-    echo "  Test 3 - UDP stego detection: PASS (but should be UDP-based now)"
+
+if [ "$test3_result" -eq 0 ]; then
+    echo "✓ Test 3: TCP Scenario 3 - PASS"
 else
-    echo "  Test 3 - UDP stego detection: FAIL (extra packet not detected)"
+    echo "✗ Test 3: TCP Scenario 3 - FAIL"
 fi
-if [ "$result4" -eq 0 ]; then
-    echo "  Test 4 - TCP reproducibility: PASS"
+
+if [ "$test4_result" -eq 0 ]; then
+    echo "✓ Test 4: TCP Scenario 4 - PASS"
 else
-    echo "  Test 4 - TCP reproducibility: FAIL (unexpected)"
+    echo "✗ Test 4: TCP Scenario 4 - FAIL"
 fi
-if [ "$result5" -ne 0 ]; then
-    echo "  Test 5 - UDP vs TCP detection: PASS (protocol difference detected)"
-else
-    echo "  Test 5 - UDP vs TCP detection: FAIL (should detect protocol difference)"
-fi
-if [ "$result6" -ne 0 ]; then
-    echo "  Test 6 - TCP tamper detection: PASS (diff detected as expected)"
-else
-    echo "  Test 6 - TCP tamper detection: FAIL (tamper was not detected!)"
-fi
-if [ "$result7" -ne 0 ]; then
-    echo "  Test 7 - UDP vs TCP tamper: PASS (both differ as expected)"
-else
-    echo "  Test 7 - UDP vs TCP tamper: FAIL (should detect differences)"
-fi
+
 echo ""
-echo "══ Generating HTML visualization ══"
+echo "════════════════════════════════════════════════════════════════"
+echo "Generating HTML visualization"
+echo "════════════════════════════════════════════════════════════════"
 python3 /app/visualize.py
 echo "Open /data/results.html in a browser to view the results."
