@@ -42,9 +42,9 @@ run_trial() {
 
     echo "── trial ${n} (scenario ${scenario}) ──"
 
-    # Capture on the client's veth from server to client on port 5000
-    # This filters out the trigger (client->server) and only captures responses
-    local filter="src 10.0.0.1 and dst 10.0.0.2 and port 5000"
+    # Capture on the client's veth all traffic from server to client
+    # This includes UDP responses and TCP handshake/data packets
+    local filter="src 10.0.0.1 and dst 10.0.0.2"
 
     ip netns exec ns_client \
         tcpdump -i veth-c -w "$pcap" -U --immediate-mode "$filter" &
