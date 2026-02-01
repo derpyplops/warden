@@ -36,6 +36,42 @@ def read_pcap(path: str) -> list[bytes]:
     return packets
 
 
+def read_pcap_with_timestamps(path: str) -> list[tuple[float, bytes]]:
+    """Read PCAP and return list of (timestamp, packet_data)"""
+    packets = []
+    with open(path, "rb") as f:
+        ghdr = f.read(24)
+        if len(ghdr) < 24:
+            raise ValueError(f"Truncated pcap: {path}")
+        magic = struct.unpack("<I", ghdr[:4])[0]
+        if magic == 0xA1B2C3D4:
+            endian = "<"
+            time_res = 1e-6 # Microseconds
+        elif magic == 0xD4C3B2A1:
+            endian = ">"
+            time_res = 1e-6
+        elif magic == 0xA1B23C4D: # Nanosecond pcap
+            endian = "<"
+            time_res = 1e-9
+        else:
+            # Try to continue typically
+            endian = "<"
+            time_res = 1e-6
+
+        while True:
+            phdr = f.read(16)
+            if len(phdr) < 16:
+                break
+            ts_sec, ts_usec, incl_len, orig_len = struct.unpack(endian + "IIII", phdr)
+            data = f.read(incl_len)
+            if len(data) < incl_len:
+                break
+            
+            timestamp = ts_sec + (ts_usec * time_res)
+            packets.append((timestamp, data))
+    return packets
+
+
 def extract_tcp_payload(pkt: bytes) -> bytes:
     """Extract payload from TCP packet, return empty if no payload"""
     if len(pkt) < 54:
@@ -182,24 +218,159 @@ def simple_warden(pkts: list[bytes], zero_ip_options: bool = False):
     return [normalize(p, zero_ip_options=zero_ip_options) for p in data_frames]
 
 
+def analyze_timing_channel(pcap_path: str):
+    """Analyze Inter-Packet Delays (IPDs) to detect timing channels"""
+    print(f"Analyzing timing for: {pcap_path}")
+    packets = read_pcap_with_timestamps(pcap_path)
+    
+    # Filter for data frames from server (heuristic: typical payload size or port)
+    # The server sends from 10.0.0.1
+    
+    timestamps = []
+    for ts, pkt in packets:
+        if is_data_frame(pkt):
+            # Try to check if src is server (10.0.0.1)
+            # IP src offset is 26=14+12
+            if len(pkt) > 30:
+                ethertype = struct.unpack("!H", pkt[12:14])[0]
+                if ethertype == 0x0800:
+                    ip_src = pkt[26:30]
+                    if ip_src == b'\x0a\x00\x00\x01': # 10.0.0.1
+                        timestamps.append(ts)
+    
+    if len(timestamps) < 2:
+        print("Not enough packets for timing analysis")
+        return
+
+    # Calculate IPDs
+    ipds = []
+    for i in range(1, len(timestamps)):
+        diff = timestamps[i] - timestamps[i-1]
+        ipds.append(diff)
+        
+    # Statistics
+    avg = sum(ipds) / len(ipds)
+    variance = sum((x - avg) ** 2 for x in ipds) / len(ipds)
+    
+    print(f"Packet Count: {len(timestamps)}")
+    print(f"Mean IPD: {avg*1000:.4f} ms")
+    print(f"Variance: {variance*1e6:.6f} (scaled)")
+    
+    # Bandwidth Estimation
+    # 1 bit per interval
+    duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0
+    bitrate = (len(timestamps) - 1) / duration if duration > 0 else 0
+    print(f"Estimated Bandwidth: {bitrate:.2f} bps (raw)")
+    
+    # Check for modulation (bi-modal distribution around 200us and 500us)
+    # 200us = 0.0002, 500us = 0.0005
+    
+    count_200 = 0
+    count_500 = 0
+    count_1000 = 0 # Fuzzy barrier 1ms
+    
+    for d in ipds:
+        if 0.00015 < d < 0.00025:
+            count_200 += 1
+        elif 0.00045 < d < 0.00055:
+            count_500 += 1
+        elif 0.0009 < d < 0.0011:
+            count_1000 += 1
+            
+    print(f"Distribution:")
+    print(f"  ~200us: {count_200}")
+    print(f"  ~500us: {count_500}")
+    print(f"  ~1ms:   {count_1000}")
+    
+    if count_1000 > len(ipds) * 0.8:
+        print("RESULT: Quantized (Fuzzy Barrier Active) - SECURE")
+    elif (count_200 + count_500) > len(ipds) * 0.5:
+        print("RESULT: Modulated (Timing Channel Detected) - VULNERABLE")
+    else:
+        print("RESULT: Indeterminate / Noise")
+        
+    return {
+        "count": len(timestamps),
+        "mean_ipd": avg,
+        "variance": variance,
+        "duration": timestamps[-1] - timestamps[0] if timestamps else 0
+    }
+
+
 def main() -> None:
     # Parse arguments
     zero_ip_options = False
+    timing_analysis = False
     cap1_path = None
     cap2_path = None
 
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == "--zero-ip-options":
             zero_ip_options = True
+        elif arg == "--timing-analysis":
+            timing_analysis = True
         elif cap1_path is None:
             cap1_path = arg
         elif cap2_path is None:
             cap2_path = arg
 
+    if timing_analysis:
+        if cap1_path is None:
+             print("Usage: analyze.py --timing-analysis <capture.pcap> [capture2.pcap]")
+             sys.exit(2)
+        stats1 = analyze_timing_channel(cap1_path)
+        if cap2_path:
+            print("-" * 40)
+            stats2 = analyze_timing_channel(cap2_path)
+            
+            # Comparative Analysis
+            if stats1 and stats2:
+                print("=" * 40)
+                print("COMPARATIVE LATENCY ANALYSIS")
+                print("=" * 40)
+                
+                dur1 = stats1["duration"]
+                dur2 = stats2["duration"]
+                mean1 = stats1["mean_ipd"]
+                mean2 = stats2["mean_ipd"]
+                
+                diff_dur = dur2 - dur1
+                diff_mean = mean2 - mean1
+                
+                # Assume Capture 2 is the "barrier enabled" one if it has higher variance/duration
+                # But just reporting difference is safer
+                
+                print(f"Total Duration:")
+                print(f"  Capture 1: {dur1*1000:.2f} ms")
+                print(f"  Capture 2: {dur2*1000:.2f} ms")
+                print(f"  Delta:    {diff_dur*1000:+.2f} ms ({((dur2-dur1)/dur1)*100:+.1f}%)")
+                
+                print(f"\nAverage Inter-Packet Delay:")
+                print(f"  Capture 1: {mean1*1000:.4f} ms")
+                print(f"  Capture 2: {mean2*1000:.4f} ms")
+                print(f"  Added Latency: {diff_mean*1000:+.4f} ms/packet")
+                
+                print(f"\nBandwidth Impact:")
+                bps1 = (stats1['count'] - 1) / dur1 if dur1 > 0 else 0
+                bps2 = (stats2['count'] - 1) / dur2 if dur2 > 0 else 0
+                print(f"  Capture 1: {bps1:.2f} bps")
+                print(f"  Capture 2: {bps2:.2f} bps")
+                print(f"  Reduction: {abs(bps1-bps2):.2f} bps ({abs((bps2-bps1)/bps1)*100:.1f}%)")
+                
+                print(f"\nTrade-off Assessment:")
+                if diff_mean > 0:
+                    print(f"  Security Cost: The barrier adds approx {diff_mean*1000:.2f} ms of latency per packet.")
+                    print(f"  Throughput Impact: Reduced by approx {abs((1/mean2 - 1/mean1)/(1/mean1))*100:.1f}%.")
+                else:
+                    print(f"  Performance: No significant latency penalty detected (or ordering reversed).")
+
+        sys.exit(0)
+
     if cap1_path is None or cap2_path is None:
-        print(f"usage: {sys.argv[0]} [--zero-ip-options] <cap1.pcap> <cap2.pcap>")
+        print(f"usage: {sys.argv[0]} [--zero-ip-options] [--timing-analysis] <cap1.pcap> <cap2.pcap>")
         print(f"")
         print(f"  --zero-ip-options: Zero out IP options/padding (defeats steganography detection)")
+        print(f"  --timing-analysis: Analyze Inter-Packet Delays instead of content")
         sys.exit(2)
 
     pkts1 = read_pcap(cap1_path)

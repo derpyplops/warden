@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warden: Network Determinism Explainer</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            color: #e2e8f0; /* Slate 200 */
+        }
+        
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .terminal-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+        .terminal-scroll::-webkit-scrollbar-track {
+            background: #1e293b; 
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb {
+            background: #475569; 
+            border-radius: 4px;
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb:hover {
+            background: #64748b; 
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Icons ---
+        const Icon = ({ size = 24, className, children, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+                {children}
+            </svg>
+        );
+
+        const Shield = (p) => <Icon {...p}><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /></Icon>;
+        const Server = (p) => <Icon {...p}><rect width="20" height="8" x="2" y="2" rx="2" ry="2" /><rect width="20" height="8" x="2" y="14" rx="2" ry="2" /><line x1="6" x2="6.01" y1="6" y2="6" /><line x1="6" x2="6.01" y1="18" y2="18" /></Icon>;
+        const Microscope = (p) => <Icon {...p}><path d="M6 18h8"/><path d="M3 22h18"/><path d="M14 22a7 7 0 1 0 0-14h-1"/><path d="M9 14h2"/><path d="M9 12a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/></Icon>;
+        const Play = (p) => <Icon {...p}><polygon points="5 3 19 12 5 21 5 3" /></Icon>;
+        const Pause = (p) => <Icon {...p}><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></Icon>;
+        const Terminal = (p) => <Icon {...p}><polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" /></Icon>;
+        const ArrowRight = (p) => <Icon {...p}><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></Icon>;
+        const ArrowUp = (p) => <Icon {...p}><path d="m18 15-6-6-6 6"/></Icon>;
+        const Box = (p) => <Icon {...p}><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></Icon>;
+        const RotateCcw = (p) => <Icon {...p}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></Icon>;
+        const Eye = (p) => <Icon {...p}><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></Icon>;
+        const Layers = (p) => <Icon {...p}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></Icon>;
+        const MousePointer = (p) => <Icon {...p}><path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="m13 13 6 6"/></Icon>;
+
+        // --- Interactive Protocol Stack Component ---
+
+        const ProtocolStack = () => {
+            const [depth, setDepth] = useState(0); // 0: Ethernet, 1: IP, 2: TCP
+            const [hoveredPart, setHoveredPart] = useState(null);
+
+            // Layer Definitions
+            const layers = {
+                0: {
+                    title: "Layer 2: Ethernet Frame (802.3 / DIX)",
+                    icon: Layers,
+                    color: "text-purple-400",
+                    parts: [
+                        { 
+                            id: 'pre', label: 'PRE/SFD', width: 10, color: 'bg-slate-400', full: 'Preamble & SFD', 
+                            example: '101010...11',
+                            binary: '0b10101010....10101011',
+                            text: '7 bytes of alternating 1s and 0s (10101010) followed by 1 byte Start Frame Delimiter (10101011). Generated by the physical NIC to allow the receiver to lock its digital phase-locked loop (DPLL) to the sender\'s clock before data arrives.' 
+                        },
+                        { 
+                            id: 'dst', label: 'DEST MAC', width: 15, color: 'bg-blue-400', full: 'Destination MAC Address', 
+                            example: '02:00:0A:00:00:02',
+                            binary: '0b00000010....00000010',
+                            text: 'The physical address of the receiving interface (ns_client). In Ethernet, the first 3 bytes are the OUI (Vendor ID). In our lab, we use locally administered addresses (02:...) to ensure determinism.' 
+                        },
+                        { 
+                            id: 'src', label: 'SRC MAC', width: 15, color: 'bg-indigo-400', full: 'Source MAC Address', 
+                            example: '02:00:0A:00:00:01',
+                            binary: '0b00000010....00000001',
+                            text: 'The physical address of the sending interface (ns_server). Switches use this to learn port associations. If this changes, ARP tables in the network must update.' 
+                        },
+                        { 
+                            id: 'typ', label: 'TYPE', width: 10, color: 'bg-amber-400', full: 'EtherType', 
+                            example: '0x0800',
+                            binary: '0b0000100000000000',
+                            text: 'A 16-bit identifier indicating which protocol is encapsulated in the payload. 0x0800 = IPv4, 0x0806 = ARP, 0x86DD = IPv6. This tells the OS kernel which handler to invoke next.' 
+                        },
+                        { 
+                            id: 'pay', label: 'PAYLOAD (IP)', width: 40, color: 'bg-emerald-500 animate-pulse', full: 'Encapsulated Packet', 
+                            example: '[IPv4 Header + Data]',
+                            binary: '0b01000101....(variable)',
+                            text: 'The data carried by the frame. For Ethernet II, this is 46-1500 bytes. If the data is shorter than 46 bytes, padding (0x00) is added. In this demo, it contains the full IPv4 packet.', 
+                            drill: 1 
+                        },
+                        { 
+                            id: 'fcs', label: 'FCS', width: 10, color: 'bg-red-400', full: 'Frame Check Sequence', 
+                            example: '0xB29A1C4E',
+                            binary: '0b10110010....01001110',
+                            text: 'A 32-bit Cyclic Redundancy Check (CRC). The sender runs the frame bits through a polynomial; the receiver does the same. If the results differ, the frame is silently dropped (Physical Layer noise detection).' 
+                        },
+                    ]
+                },
+                1: {
+                    title: "Layer 3: IPv4 Header (RFC 791)",
+                    icon: Microscope,
+                    color: "text-emerald-400",
+                    parts: [
+                        { 
+                            id: 'ver', label: 'VER', width: 8, color: 'bg-slate-400', full: 'Version', 
+                            example: '4', 
+                            binary: '0b0100',
+                            text: 'Constant value 4 (0100). If this read 6 (0110), the OS would process it as IPv6. Essential for protocol dispatching.' 
+                        },
+                        { 
+                            id: 'ihl', label: 'IHL', width: 8, color: 'bg-slate-400', full: 'Internet Header Length', 
+                            example: '5', 
+                            binary: '0b0101',
+                            text: 'The number of 32-bit words in the header. Min value is 5 (20 bytes). If Options are present, this value increases. Needed because the header is variable length.' 
+                        },
+                        { 
+                            id: 'tos', label: 'TOS', width: 8, color: 'bg-slate-500', full: 'Type of Service (DSCP)', 
+                            example: '0x00', 
+                            binary: '0b00000000',
+                            text: 'Now used for Differentiated Services (DiffServ/ECN). Routers use this to prioritize traffic (e.g., VoIP gets high priority). Often 0x00 for standard data.' 
+                        },
+                        { 
+                            id: 'len', label: 'LEN', width: 8, color: 'bg-slate-400', full: 'Total Length', 
+                            example: '60 bytes', 
+                            binary: '0b0000000000111100',
+                            text: 'Total length of the IP packet (Header + Data). Max is 65,535 bytes. This field allows the receiver to know when the packet ends, independent of the Ethernet frame size.' 
+                        },
+                        { 
+                            id: 'id', label: 'ID (Stego)', width: 12, color: 'bg-amber-500', full: 'Identification', 
+                            example: '0x3A2F', 
+                            binary: '0b0011101000101111',
+                            text: 'Used to uniquely identify fragments of an original IP packet. If unfragmented, this value is technically arbitrary. Old OSes incremented it; modern OSes randomize it. **Stego Risk:** Hackers hide 16 bits of secret data here.', 
+                            wardenAction: 'Warden rewrites this to a cryptographically secure random value.' 
+                        },
+                        { 
+                            id: 'flg', label: 'FLG', width: 8, color: 'bg-slate-400', full: 'Flags / Offset', 
+                            example: 'DF (Don\'t Fragment)', 
+                            binary: '0b0100000000000000',
+                            text: '3 bits: Reserved, DF, MF. Then 13 bits Fragment Offset. DF=1 tells routers "Drop this if it\'s too big, don\'t fragment it". Used for MTU path discovery.' 
+                        },
+                        { 
+                            id: 'ttl', label: 'TTL', width: 8, color: 'bg-slate-500', full: 'Time To Live', 
+                            example: '64', 
+                            binary: '0b01000000',
+                            text: 'Decremented by 1 at every router hop. If it hits 0, the packet is killed (preventing infinite loops). Default is usually 64 (Linux) or 128 (Windows).' 
+                        },
+                        { 
+                            id: 'proto', label: 'PRO', width: 8, color: 'bg-amber-400', full: 'Protocol', 
+                            example: '6 (TCP)', 
+                            binary: '0b00000110',
+                            text: 'Defines the Layout of the Data payload. 6=TCP, 17=UDP, 1=ICMP. Crucial for demultiplexing up the stack.' 
+                        },
+                        { 
+                            id: 'src', label: 'SRC IP', width: 12, color: 'bg-indigo-400', full: 'Source IP', 
+                            example: '10.0.0.1', 
+                            binary: '0b00001010....00000001',
+                            text: 'The 32-bit logical address of the sender. Used by routers for RPF checks and by the receiver for replies.' 
+                        },
+                        { 
+                            id: 'dst', label: 'DST IP', width: 12, color: 'bg-blue-400', full: 'Destination IP', 
+                            example: '10.0.0.2', 
+                            binary: '0b00001010....00000010',
+                            text: 'The 32-bit logical address of the receiver. Routers look at this to make forwarding decisions.' 
+                        },
+                        { 
+                            id: 'data', label: 'DATA (TCP)', width: 16, color: 'bg-emerald-500 animate-pulse', full: 'IP Payload', 
+                            example: '[TCP Segment]', 
+                            binary: '0b11000000....',
+                            text: 'Contains the Layer 4 Segment (TCP Header + App Data).', 
+                            drill: 2 
+                        },
+                    ]
+                },
+                2: {
+                    title: "Layer 4: TCP Segment (RFC 793)",
+                    icon: Terminal,
+                    color: "text-amber-400",
+                    parts: [
+                        { 
+                            id: 'prt', label: 'PORTS', width: 15, color: 'bg-blue-300', full: 'Src/Dst Ports', 
+                            example: 'Src: 49152, Dst: 80', 
+                            binary: '0b1100000000000000....',
+                            text: 'Src Port is ephemeral (randomly picked by OS, e.g., 49152). Dst Port is the service (80=HTTP). Together with IPs, they form the "5-tuple" socket pair.' 
+                        },
+                        { 
+                            id: 'seq', label: 'SEQ #', width: 20, color: 'bg-amber-500', full: 'Sequence Number', 
+                            example: '0x1A2B3C4D', 
+                            binary: '0b00011010....01001101',
+                            text: 'Tracks byte stream position. The Initial Sequence Number (ISN) must be random to prevent spoofing. **Stego Risk:** 32 bits of "Token" space often used to hide keys.', 
+                            wardenAction: 'Warden offsets this by a constant random value.' 
+                        },
+                        { 
+                            id: 'ack', label: 'ACK', width: 10, color: 'bg-slate-400', full: 'Ack Number', 
+                            example: '0x00000000', 
+                            binary: '0b00000000....00000000',
+                            text: 'The next sequence number the sender expects to receive. Valid only if ACK flag is set. In the first SYN packet, this is 0.' 
+                        },
+                        { 
+                            id: 'off', label: 'OFF', width: 5, color: 'bg-slate-500', full: 'Data Offset', 
+                            example: '5', 
+                            binary: '0b0101',
+                            text: 'Size of TCP header in 32-bit words. Min 5 (20 bytes). Used to locate where Data begins.' 
+                        },
+                        { 
+                            id: 'flg', label: 'FLAGS', width: 10, color: 'bg-slate-400', full: 'Control Flags', 
+                            example: 'SYN (000000010)', 
+                            binary: '0b000000010',
+                            text: '9 bits (NS, CWR, ECE, URG, ACK, PSH, RST, SYN, FIN). Controls the state machine. SYN starts connection, FIN closes it, RST aborts it.' 
+                        },
+                        { 
+                            id: 'win', label: 'WIN', width: 10, color: 'bg-slate-400', full: 'Window Size', 
+                            example: '64240', 
+                            binary: '0b1111101011110000',
+                            text: 'Flow control. Tells the sender how many bytes the receiver is willing to accept right now buffer space.' 
+                        },
+                        { 
+                            id: 'sum', label: 'SUM', width: 10, color: 'bg-slate-400', full: 'Checksum', 
+                            example: '0x6A12', 
+                            binary: '0b0110101000010010',
+                            text: 'Verifies integrity of Header, Data, and "Pseudo-Header" (IPs). Crucial for end-to-end reliability.' 
+                        },
+                        { 
+                            id: 'pay', label: 'APP DATA', width: 20, color: 'bg-emerald-400', full: 'Application Data', 
+                            example: '{"text": "hello"}', 
+                            binary: '0b01111011....01111101',
+                            text: 'The payload for the application (Layer 7). HTTP, SSH, FTP data resides here. In this lab, it\'s JSON.' 
+                        },
+                    ]
+                }
+            };
+
+            const currentLayer = layers[depth];
+            const LayerIcon = currentLayer.icon;
+
+            return (
+                <div className="bg-slate-900 rounded-xl border border-slate-700 p-6 shadow-xl mb-6 relative overflow-hidden transition-all duration-500">
+                     <div className="flex items-center justify-between mb-4">
+                        <h3 className={`text-xl font-bold text-white flex items-center ${depth > 0 ? 'fade-in' : ''}`}>
+                            <LayerIcon className={`mr-2 ${currentLayer.color}`} /> 
+                            {currentLayer.title}
+                        </h3>
+                        {depth > 0 && (
+                            <button 
+                                onClick={() => { setDepth(depth - 1); setHoveredPart(null); }}
+                                className="flex items-center px-3 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs font-bold text-slate-300 transition-colors"
+                            >
+                                <ArrowUp size={14} className="mr-1" /> Go Up Layer
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Interactive Bar */}
+                    <div className="flex w-full mb-6 rounded-lg overflow-hidden ring-4 ring-slate-800 h-20 select-none shadow-2xl">
+                        {currentLayer.parts.map(p => (
+                            <div 
+                                key={p.id}
+                                onMouseEnter={() => setHoveredPart(p)}
+                                onDoubleClick={() => p.drill && setDepth(p.drill)}
+                                className={`flex flex-col items-center justify-center font-bold text-slate-900 transition-all ${p.color} hover:brightness-110 px-1 text-center border-r border-black/10 relative group ${p.drill ? 'cursor-pointer hover:shadow-inner' : 'cursor-help'}`}
+                                style={{ width: `${p.width}%` }}
+                            >
+                                <span className="text-[10px] md:text-xs z-10">{p.label}</span>
+                                {p.drill && (
+                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-30 bg-white transition-opacity">
+                                        <MousePointer size={24} />
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Info Panel */}
+                    <div className="bg-slate-800 p-5 rounded-lg min-h-[160px] transition-all border border-slate-600 relative overflow-hidden">
+                        {hoveredPart ? (
+                            <div className="fade-in relative z-10">
+                                <div className="flex flex-col md:flex-row md:items-start justify-between mb-4">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center space-x-2">
+                                            <span className="font-bold text-white text-lg">{hoveredPart.full}</span>
+                                            {hoveredPart.drill && <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded font-mono uppercase tracking-wide">Drill Down Available</span>}
+                                        </div>
+                                        <div className="font-mono text-xs text-blue-300">
+                                            Example: <span className="text-white">{hoveredPart.example}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col items-end space-y-1 mt-2 md:mt-0">
+                                        <span className="font-mono text-xs bg-black/30 px-3 py-1 rounded text-emerald-400 border border-slate-700">
+                                            Binary: {hoveredPart.binary}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div className="border-t border-slate-700 pt-3 mt-1">
+                                    <p className="text-slate-300 leading-relaxed text-sm">{hoveredPart.text}</p>
+                                </div>
+                                {hoveredPart.wardenAction && (
+                                    <div className="mt-4 text-xs bg-emerald-950/30 border border-emerald-900/50 p-2 rounded text-emerald-400 italic flex items-start">
+                                        <Shield size={14} className="mr-2 mt-0.5 flex-shrink-0" />
+                                        <span><strong>Warden Strategy:</strong> {hoveredPart.wardenAction}</span>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="text-slate-500 flex flex-col items-center justify-center h-full italic space-y-2">
+                                <span>Hover over segments for detailed analysis (Binary, Usage, Description).</span>
+                                {depth < 2 && <span className="flex items-center text-emerald-500"><MousePointer size={14} className="mr-1"/> Double-click payloads to inspect inner layers.</span>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Visualizer Component ---
+
+        const Visualizer = ({ scenario }) => {
+            const [transmitting, setTransmitting] = useState(false);
+            const [isPaused, setIsPaused] = useState(false);
+            const [progress, setProgress] = useState(0); 
+            const [logs, setLogs] = useState([]);
+            const duration = 45000; // 45 seconds for highly granular inspection
+            const intervalRef = useRef(null);
+            const logEndRef = useRef(null);
+
+            const isMalicious = scenario === 'malicious';
+            const isWarden = scenario === 'warden';
+
+            const addLog = (msg, type='info', binary='') => {
+                setLogs(prev => {
+                    // Avoid duplicates if paused/resumed quickly
+                    if (prev.length > 0 && prev[prev.length-1].msg === msg) return prev;
+                    return [...prev, { msg, type, binary, id: Date.now() }];
+                });
+            };
+
+            const handleTransmit = () => {
+                if (transmitting && progress < 100) {
+                    setIsPaused(!isPaused);
+                    return;
+                }
+                setTransmitting(true);
+                setIsPaused(false);
+                setProgress(0);
+                setLogs([]);
+            };
+
+            const reset = () => {
+                setTransmitting(false);
+                setIsPaused(false);
+                setProgress(0);
+                setLogs([]);
+            };
+
+            useEffect(() => reset(), [scenario]);
+            
+            // Scroll to bottom of logs
+            useEffect(() => {
+                if (logEndRef.current) logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            }, [logs]);
+
+            useEffect(() => {
+                if (transmitting && !isPaused && progress < 100) {
+                    intervalRef.current = setInterval(() => {
+                        setProgress(prev => {
+                            const next = prev + (100 / (duration / 50)); 
+                            
+                            // --- DETAILED SIMULATION LOGIC ---
+                            
+                            // 0-5%: PREAMBLE
+                            if (prev < 1 && next >= 1) addLog("PHY: Initializing Transmitter...", "dim");
+                            if (prev < 3 && next >= 3) addLog("L2: Generating Preamble (56 bits)", "dim", "0b10101010....10101010");
+                            if (prev < 5 && next >= 5) addLog("L2: Start Frame Delimiter (8 bits)", "dim", "0b10101011");
+
+                            // 5-30%: TCP CONSTRUCTION (Bottom-Up)
+                            if (prev < 7 && next >= 7) addLog("L4 [TCP]: Allocating Segment Buffer...", "section");
+                            if (prev < 9 && next >= 9) addLog("TCP: Source Port (Ephemeral: 49152)", "info", "0b11000000 00000000");
+                            if (prev < 11 && next >= 11) addLog("TCP: Dest Port (HTTP: 80)", "info", "0b00000000 01010000");
+                            if (prev < 14 && next >= 14) addLog("TCP: Sequence Number (ISN: Random)", "info", "0b00011010....01001101");
+                            if (prev < 16 && next >= 16) addLog("TCP: Ack Number (0)", "info", "0b00000000....00000000");
+                            if (prev < 18 && next >= 18) addLog("TCP: Data Offset (Header Len: 5)", "info", "0b0101");
+                            if (prev < 20 && next >= 20) addLog("TCP: Reserved Bits (Must be 0)", "info", "0b000");
+                            if (prev < 22 && next >= 22) addLog("TCP: Flags (SYN Set)", "info", "0b000000010");
+                            if (prev < 24 && next >= 24) addLog("TCP: Window Size (64240)", "info", "0b11111010 11110000");
+                            if (prev < 26 && next >= 26) addLog("TCP: Calculating Checksum...", "dim");
+                            if (prev < 28 && next >= 28) addLog("TCP: Checksum Finalized (0x6A12)", "success", "0b01101010 00010010");
+                            if (prev < 30 && next >= 30) addLog("TCP: Urgent Pointer (0)", "info", "0b00000000 00000000");
+
+                            // 30-60%: IP ENCAPSULATION
+                            if (prev < 32 && next >= 32) addLog("L3 [IP]: Encapsulating TCP Segment...", "section");
+                            if (prev < 34 && next >= 34) addLog("IP: Version (4)", "info", "0b0100");
+                            if (prev < 36 && next >= 36) addLog("IP: IHL (5 words)", "info", "0b0101");
+                            if (prev < 38 && next >= 38) addLog("IP: Type of Service (0x00)", "info", "0b00000000");
+                            if (prev < 40 && next >= 40) addLog("IP: Total Length (60 bytes)", "info", "0b00000000 00111100");
+                            
+                            // Stego Point
+                            if (prev < 44 && next >= 44) {
+                                if (isMalicious) addLog("IP: ID Field (INJECTING SECRET 'SE')", "warn", "0b01010011 01000101 (0x5345)");
+                                else addLog("IP: ID Field (Random Generated)", "info", "0b00111010 00101111 (0x3A2F)");
+                            }
+                            
+                            if (prev < 46 && next >= 46) addLog("IP: Flags (Don't Fragment)", "info", "0b010");
+                            if (prev < 48 && next >= 48) addLog("IP: Frag Offset (0)", "info", "0b0000000000000");
+                            if (prev < 50 && next >= 50) addLog("IP: TTL (64)", "info", "0b01000000");
+                            if (prev < 52 && next >= 52) addLog("IP: Protocol (TCP: 6)", "info", "0b00000110");
+                            if (prev < 54 && next >= 54) addLog("IP: Src Addr (10.0.0.1)", "info", "0b00001010....00000001");
+                            if (prev < 56 && next >= 56) addLog("IP: Dst Addr (10.0.0.2)", "info", "0b00001010....00000010");
+                            if (prev < 58 && next >= 58) addLog("IP: Calculating Checksum...", "dim");
+                            if (prev < 60 && next >= 60) addLog("IP: Checksum Finalized (0xB2A1)", "success", "0b10110010 10100001");
+
+                            // 60-70%: ETHERNET FRAMING
+                            if (prev < 62 && next >= 62) addLog("L2 [ETH]: Applying Frame Header...", "section");
+                            if (prev < 64 && next >= 64) addLog("ETH: Dest MAC (02:00:0A:00:00:02)", "info", "0b00000010....00000010");
+                            if (prev < 66 && next >= 66) addLog("ETH: Src MAC (02:00:0A:00:00:01)", "info", "0b00000010....00000001");
+                            if (prev < 68 && next >= 68) addLog("ETH: EtherType (IPv4: 0x0800)", "info", "0b00001000 00000000");
+
+                            // 70-80%: WARDEN INTERVENTION
+                            if (isWarden && prev < 72 && next >= 72) addLog("WARDEN: Deep Packet Inspection...", "warden");
+                            if (isWarden && prev < 75 && next >= 75) {
+                                if (isMalicious) addLog("WARDEN: Detected High Entropy IP ID (0x5345)", "warden");
+                                else addLog("WARDEN: Analyzing IP ID entropy...", "warden");
+                            }
+                            if (isWarden && prev < 78 && next >= 78) {
+                                addLog("WARDEN: Rewriting ID -> 0x9B12 (Secure Random)", "warden-action", "0b10011011 00010010");
+                                addLog("WARDEN: Recalculating IP Checksum...", "warden");
+                            }
+
+                            // 80-90%: FCS & TRANSMIT
+                            if (prev < 82 && next >= 82) addLog("L2: Calculating FCS (CRC32)...", "dim");
+                            if (prev < 85 && next >= 85) addLog("L2: FCS Appended (0xB29A1C4E)", "success", "0b10110010....01001110");
+                            if (prev < 88 && next >= 88) addLog("PHY: Serializing to copper...", "info");
+                            
+                            // 90-100%: RECEIVE
+                            if (prev < 95 && next >= 95) addLog("RX: Frame Received at 10.0.0.2", "success");
+                            if (prev < 98 && next >= 98) {
+                                if (isMalicious && !isWarden) addLog("RX: Extracted Secret 'SE' from IP ID", "warn");
+                                else if (isWarden) addLog("RX: Packet Clean. ID Normalized.", "success");
+                                else addLog("RX: Handed to OS Kernel.", "success");
+                            }
+
+                            return next >= 100 ? 100 : next;
+                        });
+                    }, 50);
+                } else {
+                    clearInterval(intervalRef.current);
+                }
+                return () => clearInterval(intervalRef.current);
+            }, [transmitting, isPaused, progress]);
+
+            return (
+                <div className="py-4">
+                    <div className="flex justify-between items-end mb-4 px-2">
+                        <div className="text-sm font-bold text-slate-400 uppercase tracking-wider">Namespace: ns_server</div>
+                        <div className="text-sm font-bold text-slate-400 uppercase tracking-wider">Namespace: ns_client</div>
+                    </div>
+
+                    {/* Virtual Cable Visual */}
+                    <div className="relative bg-slate-900 rounded-xl border border-slate-700 p-8 h-[200px] flex items-center justify-between overflow-hidden shadow-2xl mb-6">
+                        <div className="absolute inset-0 opacity-10" style={{backgroundImage: 'radial-gradient(#475569 1px, transparent 1px)', backgroundSize: '20px 20px'}}></div>
+                        
+                        {/* Cable */}
+                        <div className="absolute left-[12%] right-[12%] top-1/2 h-1 bg-slate-700">
+                            <div className={`h-full shadow-[0_0_10px_rgba(59,130,246,0.5)] transition-all duration-200 ${isMalicious ? 'bg-amber-500 shadow-amber-500/50' : 'bg-blue-500'}`} style={{ width: `${progress}%` }}></div>
+                        </div>
+
+                        {/* Nodes */}
+                        <div className="relative z-10 flex flex-col items-center">
+                            <div className="w-20 h-20 bg-slate-800 rounded-xl border-2 border-slate-600 flex items-center justify-center">
+                                <Server className={transmitting && progress < 10 ? 'text-blue-400 animate-pulse' : 'text-slate-500'} size={40} />
+                            </div>
+                            <span className="text-xs text-slate-500 mt-2">10.0.0.1</span>
+                        </div>
+
+                        {isWarden && (
+                            <div className="relative z-10 flex flex-col items-center">
+                                <div className={`w-16 h-16 bg-slate-800 rounded-lg border-2 flex items-center justify-center transition-all duration-300 ${progress > 65 && progress < 75 ? 'border-emerald-400 scale-110 shadow-[0_0_20px_rgba(16,185,129,0.4)]' : 'border-slate-600'}`}>
+                                    <Shield className={progress > 65 && progress < 75 ? 'text-emerald-400' : 'text-slate-500'} size={32} />
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-400 mt-1 bg-black/50 px-2 rounded">WARDEN</span>
+                            </div>
+                        )}
+
+                        <div className="relative z-10 flex flex-col items-center">
+                             <div className={`w-20 h-20 bg-slate-800 rounded-xl border-2 flex items-center justify-center transition-all duration-500 ${progress >= 100 ? (isMalicious && !isWarden ? 'border-amber-500 shadow-amber-500/50' : 'border-emerald-500 shadow-emerald-500/50') : 'border-slate-600'}`}>
+                                {isMalicious && progress >= 100 && !isWarden ? <Eye className="text-amber-400" size={40} /> : <Terminal className={progress >= 100 ? 'text-emerald-400' : 'text-slate-500'} size={40} />}
+                            </div>
+                            <span className="text-xs text-slate-500 mt-2">10.0.0.2</span>
+                        </div>
+
+                        {/* Moving Packet */}
+                        {transmitting && progress > 50 && progress < 90 && (
+                            <div className="absolute top-1/2 -mt-6 z-20 transition-all duration-75 ease-linear" style={{ left: `${12 + ((progress - 50) * 1.9)}%` }}>
+                                <div className="flex flex-col items-center">
+                                    <div className={`text-slate-900 font-bold px-2 py-0.5 rounded shadow-lg text-[10px] mb-1 ${isMalicious ? 'bg-amber-500' : 'bg-emerald-500'}`}>
+                                        FRAME
+                                    </div>
+                                    <Box className="text-white fill-white/20" size={32} />
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Controls & Inspector Grid */}
+                    <div className="grid md:grid-cols-3 gap-6">
+                        {/* Controls */}
+                        <div className="col-span-1 bg-slate-800 p-6 rounded-xl border border-slate-700 flex flex-col justify-center space-y-4">
+                            <div className="text-center">
+                                <h4 className="font-bold text-white mb-1">{isMalicious ? 'Covert Channel' : (isWarden ? 'Active Defense' : 'Standard')}</h4>
+                                <p className="text-xs text-slate-400">{isMalicious ? 'IP ID Steganography' : (isWarden ? 'Warden active scrubbing' : 'Normal Traffic')}</p>
+                            </div>
+                            
+                            <div className="flex space-x-2 justify-center">
+                                <button onClick={handleTransmit} className={`flex items-center px-6 py-3 rounded-full font-bold transition-all shadow-lg ${progress === 100 ? 'bg-slate-700 text-slate-400' : (isMalicious ? 'bg-amber-600 hover:bg-amber-500 text-slate-900' : 'bg-blue-600 hover:bg-blue-500 text-white')}`}>
+                                    {transmitting && progress < 100 ? (isPaused ? <Play className="mr-2" size={18} /> : <Pause className="mr-2" size={18} />) : <ArrowRight className="ml-2" size={16}/>}
+                                    {transmitting && progress < 100 ? (isPaused ? 'Resume' : 'Pause') : 'Start'}
+                                </button>
+                                {transmitting && <button onClick={reset} className="p-3 bg-slate-700 rounded-full hover:bg-slate-600 text-white"><RotateCcw size={20} /></button>}
+                            </div>
+                            {transmitting && <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-700"><div className={`h-full transition-all duration-200 ${isMalicious ? 'bg-amber-500' : 'bg-blue-500'}`} style={{width: `${progress}%`}}></div></div>}
+                        </div>
+
+                        {/* Detailed Log */}
+                        <div className="col-span-2 bg-slate-950 rounded-xl border border-slate-700 overflow-hidden flex flex-col h-[360px]">
+                            <div className="bg-slate-800 px-4 py-2 text-xs font-mono text-slate-400 border-b border-slate-700 flex justify-between">
+                                <span>Packet Trace (Detailed - 45s Duration)</span>
+                                <span>{logs.length} events</span>
+                            </div>
+                            <div className="p-4 font-mono text-xs overflow-y-auto space-y-2 terminal-scroll">
+                                {logs.length === 0 && <div className="text-slate-600 italic text-center py-20">Waiting for transmission start...</div>}
+                                {logs.map(log => (
+                                    <div key={log.id} className="fade-in border-l-2 border-slate-800 pl-3 py-1">
+                                        <div className={`font-bold ${
+                                            log.type === 'section' ? 'text-white text-sm border-b border-slate-800 pb-1 mt-2' :
+                                            log.type === 'warn' ? 'text-amber-500' :
+                                            log.type === 'warden' ? 'text-emerald-400' :
+                                            log.type === 'warden-action' ? 'text-emerald-300 bg-emerald-900/20 p-1 rounded inline-block' :
+                                            log.type === 'success' ? 'text-emerald-500' :
+                                            log.type === 'dim' ? 'text-slate-500' :
+                                            'text-blue-300'
+                                        }`}>
+                                            {log.msg}
+                                        </div>
+                                        {log.binary && <div className="text-[10px] text-slate-600 mt-0.5 font-mono tracking-widest">{log.binary}</div>}
+                                    </div>
+                                ))}
+                                <div ref={logEndRef} />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [scenario, setScenario] = useState('standard'); 
+
+            return (
+                <div className="min-h-screen pb-20">
+                    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 backdrop-blur-md bg-opacity-80">
+                        <div className="max-w-5xl mx-auto px-4 py-4 flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div className="flex items-center space-x-3">
+                                <div className="bg-blue-600 p-2 rounded-lg shadow-lg shadow-blue-900/50"><Shield size={24} className="text-white" /></div>
+                                <div><h1 className="text-xl font-bold text-white tracking-tight">Warden</h1><span className="text-xs text-blue-400 font-mono">Deterministic Network Lab</span></div>
+                            </div>
+                            <div className="flex bg-slate-800 p-1 rounded-lg">
+                                {['standard', 'malicious', 'warden'].map(s => (
+                                    <button key={s} onClick={() => setScenario(s)} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-colors ${scenario === s ? (s === 'malicious' ? 'bg-amber-600 text-slate-900' : (s === 'warden' ? 'bg-emerald-600 text-white' : 'bg-blue-600 text-white')) : 'text-slate-400 hover:text-white'}`}>
+                                        {s === 'standard' ? 'Standard' : (s === 'malicious' ? 'Covert Channel' : 'Active Warden')}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="max-w-5xl mx-auto px-4 mt-8">
+                        <div className="fade-in space-y-8">
+                            <section>
+                                <h2 className="text-2xl font-bold text-white mb-6">Protocol Stack Explorer</h2>
+                                <ProtocolStack />
+                            </section>
+
+                            <section>
+                                <h2 className="text-2xl font-bold text-white mb-4">Slow-Motion Simulation</h2>
+                                <Visualizer scenario={scenario} />
+                            </section>
+
+                            <section className="grid md:grid-cols-2 gap-8 border-t border-slate-800 pt-8">
+                                <div>
+                                    <h3 className="text-lg font-bold text-white mb-2 underline decoration-blue-500 underline-offset-4">Interactive Layers</h3>
+                                    <p className="text-slate-400 text-sm leading-relaxed">
+                                        Use the <strong>Protocol Stack Explorer</strong> above to investigate how data is nested. Double-clicking the payload of the Ethernet frame reveals the IP packet inside, and doing the same for IP reveals the TCP segment. This hierarchy allows "Active Wardens" to inspect traffic at different depths.
+                                    </p>
+                                </div>
+                                <div>
+                                    <h3 className="text-lg font-bold text-white mb-2 underline decoration-emerald-500 underline-offset-4">Bit-Level Inspection</h3>
+                                    <p className="text-slate-400 text-sm leading-relaxed">
+                                        The simulation above runs at <strong>1/1000th speed</strong> (45 seconds). The log panel displays the exact binary (or hex) values being constructed. Notice how the Warden (in Green mode) actively detects high-entropy fields like IP ID (0x5345) and re-maps them to neutral values (0x9B12) before they leave the network.
+                                    </p>
+                                </div>
+                            </section>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

@@ -11,6 +11,7 @@ Supports 5 scenarios:
 5. TCP response with steganographic data in IP padding
 """
 
+
 import struct
 import socket
 import json
@@ -42,6 +43,55 @@ STEG_FRAMES_START = 10    # Start hiding message in frame 10
 STEG_BYTES_PER_FRAME = 1  # Hide 1 byte per frame
 
 
+class FuzzyBarrier:
+    """
+    Buffers packets and releases them at 1ms intervals (fuzzy barrier).
+    This mitigates sub-microsecond timing covert channels.
+    """
+    def __init__(self, sock, interval=0.001):
+        self.sock = sock
+        self.interval = interval
+        self.buffer = []
+        self.start_time = time.monotonic()
+        self.next_tick = self.start_time + self.interval
+
+    def sendto(self, data, addr):
+        """Buffer packet and check if we should flush"""
+        self.buffer.append((data, addr))
+        self._check_tick()
+
+    def recv(self, bufsize):
+        """Pass-through for recv (TCP handshake needs this)"""
+        return self.sock.recv(bufsize)
+
+    def settimeout(self, value):
+        """Pass-through for settimeout"""
+        self.sock.settimeout(value)
+
+    def _check_tick(self):
+        now = time.monotonic()
+        if now >= self.next_tick:
+            self._flush()
+            # Advance tick to the next future interval
+            ticks_passed = int((now - self.start_time) / self.interval)
+            self.next_tick = self.start_time + (ticks_passed + 1) * self.interval
+
+    def _flush(self):
+        if not self.buffer:
+            return
+        for data, addr in self.buffer:
+            self.sock.sendto(data, addr)
+        self.buffer.clear()
+
+    def flush(self):
+        """Force flush remaining packets, waiting for next tick"""
+        if self.buffer:
+            delay = self.next_tick - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self._flush()
+
+
 def tamper_payload(payload: bytes, offset: int = TAMPER_OFFSET) -> bytes:
     """XOR a byte in the payload at the given offset"""
     if offset >= len(payload):
@@ -49,6 +99,14 @@ def tamper_payload(payload: bytes, offset: int = TAMPER_OFFSET) -> bytes:
     buf = bytearray(payload)
     buf[offset] ^= 0xFF
     return bytes(buf)
+
+
+
+def busy_wait(seconds: float) -> None:
+    """Busy wait for high precision timing in Python"""
+    start = time.perf_counter()
+    while time.perf_counter() - start < seconds:
+        pass
 
 
 def build_udp_frame(ip_id: int, chunk: bytes) -> bytes:
@@ -250,7 +308,7 @@ def parse_trigger_json(pkt) -> int:
         scenario = data.get("scenario", 1)
 
         # Validate scenario is in range
-        if isinstance(scenario, int) and 1 <= scenario <= 5:
+        if isinstance(scenario, int) and 1 <= scenario <= 6:
             return scenario
         else:
             print(f"[server] invalid scenario {scenario}, defaulting to 1", flush=True)
@@ -367,6 +425,9 @@ def handle_scenario_1(payload: bytes, sock: socket.socket) -> None:
     print(f"[server] scenario 1: sending {len(frames)} UDP frames (normal)", flush=True)
     for frame in frames:
         sock.sendto(frame, (IFACE, 0))
+    
+    if hasattr(sock, "flush"):
+        sock.flush()
 
 
 def handle_scenario_2(payload: bytes, sock: socket.socket) -> None:
@@ -377,6 +438,9 @@ def handle_scenario_2(payload: bytes, sock: socket.socket) -> None:
     print(f"[server] scenario 2: sending {len(frames)} UDP frames (tampered at byte {TAMPER_OFFSET})", flush=True)
     for frame in frames:
         sock.sendto(frame, (IFACE, 0))
+    
+    if hasattr(sock, "flush"):
+        sock.flush()
 
 
 def handle_scenario_3(payload: bytes, sock: socket.socket, client_sport: int) -> None:
@@ -406,6 +470,9 @@ def handle_scenario_3(payload: bytes, sock: socket.socket, client_sport: int) ->
     fin_ack = build_tcp_fin_ack(client_dport, last_seq, INITIAL_SEQ_CLIENT + 1)
     sock.sendto(fin_ack, (IFACE, 0))
     print(f"[server] scenario 3: sent FIN-ACK", flush=True)
+
+    if hasattr(sock, "flush"):
+        sock.flush()
 
     time.sleep(0.1)
 
@@ -440,6 +507,9 @@ def handle_scenario_4(payload: bytes, sock: socket.socket, client_sport: int) ->
     fin_ack = build_tcp_fin_ack(client_dport, last_seq, INITIAL_SEQ_CLIENT + 1)
     sock.sendto(fin_ack, (IFACE, 0))
     print(f"[server] scenario 4: sent FIN-ACK", flush=True)
+
+    if hasattr(sock, "flush"):
+        sock.flush()
 
     time.sleep(0.1)
 
@@ -477,13 +547,61 @@ def handle_scenario_5(payload: bytes, sock: socket.socket, client_sport: int) ->
     sock.sendto(fin_ack, (IFACE, 0))
     print(f"[server] scenario 5: sent FIN-ACK", flush=True)
 
+    if hasattr(sock, "flush"):
+        sock.flush()
+
     time.sleep(0.1)
+
+
+
+def handle_scenario_6(payload: bytes, sock: socket.socket) -> None:
+    """UDP response with Covert Timing Channel (Chupja simulation)
+    
+    Embeds 'SECRT' in inter-packet delays.
+    '1': 500us delay
+    '0': 200us delay
+    """
+    frames = precompute_udp_frames(payload)
+    
+    # Message to hide
+    secret = b"SECRT"
+    bits = ""
+    for byte in secret:
+        bits += f"{byte:08b}"
+    
+    print(f"[server] scenario 6: sending {len(frames)} UDP frames with covert timing '{secret.decode()}'", flush=True)
+    print(f"[server] covert pattern: {bits}", flush=True)
+    
+    bit_idx = 0
+    start_prime = time.perf_counter()
+    
+    for i in range(len(frames)):
+        frame = frames[i]
+        delay = 0.0002 # Default fast (200us)
+        
+        # Modulate delay starting from 6th packet (index 5)
+        # This delay happens BEFORE sending packet 'i'
+        if i >= 5:
+            if bit_idx < len(bits):
+                if bits[bit_idx] == '1':
+                    delay = 0.0005 # 500us
+                bit_idx += 1
+        
+        # Apply delay (except for the very first packet)
+        if i > 0:
+            busy_wait(delay)
+            
+        sock.sendto(frame, (IFACE, 0))
+    
+    if hasattr(sock, "flush"):
+        sock.flush()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", default="/app/sample.json")
     parser.add_argument("--repeat", type=int, default=12)
+    parser.add_argument("--fuzzy-barrier", action="store_true", help="Enable 1ms fuzzy barrier retiming")
     args = parser.parse_args()
 
     with open(args.json, "r") as f:
@@ -493,8 +611,14 @@ def main() -> None:
     print(f"[server] payload: {len(response_bytes)} bytes", flush=True)
 
     # AF_PACKET raw socket — we supply full Ethernet frames
-    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
-    sock.bind((IFACE, 0))
+    raw_sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+    raw_sock.bind((IFACE, 0))
+
+    if args.fuzzy_barrier:
+        print("[server] fuzzy barrier enabled (1ms buffer)", flush=True)
+        sock = FuzzyBarrier(raw_sock)
+    else:
+        sock = raw_sock
 
     print("[server] waiting for trigger ...", flush=True)
     scenario, client_sport = wait_for_trigger(sock)
@@ -510,11 +634,15 @@ def main() -> None:
         handle_scenario_4(response_bytes, sock, client_sport)
     elif scenario == 5:
         handle_scenario_5(response_bytes, sock, client_sport)
+    elif scenario == 6:
+        handle_scenario_6(response_bytes, sock)
     else:
         print(f"[server] unknown scenario {scenario}, defaulting to 1", flush=True)
         handle_scenario_1(response_bytes, sock)
 
-    sock.close()
+    if hasattr(sock, "close") and sock is not raw_sock:
+        sock.close() 
+    raw_sock.close()
     print("[server] done", flush=True)
 
 

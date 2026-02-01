@@ -1,10 +1,10 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        iproute2 \
-        tcpdump \
-        jq \
+    iproute2 \
+    tcpdump \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Install scapy for packet manipulation
@@ -14,6 +14,6 @@ WORKDIR /app
 
 COPY server.py client.py analyze.py visualize.py collect_hashes.py augment_hash.py run.sh sample.json ./
 
-RUN chmod +x run.sh
+RUN chmod +x run.sh 
 
 CMD ["./run.sh"]

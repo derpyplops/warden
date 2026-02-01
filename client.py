@@ -86,6 +86,59 @@ def receive_udp_response(sock: socket.socket) -> bytes:
     return b"".join(chunks)
 
 
+def receive_udp_with_timing_decoding(sock: socket.socket) -> bytes:
+    """Receive UDP response and decode Chupja timing channel"""
+    chunks = []
+    
+    # Timing analysis
+    arrival_times = []
+    
+    sock.settimeout(RECV_TIMEOUT)
+    try:
+        while True:
+            data, _ = sock.recvfrom(65535)
+            # High-precision timestamp
+            arrival_times.append(time.perf_counter())
+            chunks.append(data)
+    except socket.timeout:
+        pass
+        
+    # Decode Chupja
+    # Threshold between 200us ('0') and 500us ('1') = 350us = 0.00035s
+    # Skip first 5 packets (priming)
+    if len(arrival_times) > 5:
+        deltas = []
+        bits = ""
+        # Calculate IPDs
+        for i in range(5, len(arrival_times)):
+            diff = arrival_times[i] - arrival_times[i-1]
+            deltas.append(diff)
+            if diff > 0.00035: # 350us
+                bits += "1"
+            else:
+                bits += "0"
+        
+        # Group into bytes
+        decoded_bytes = bytearray()
+        for i in range(0, len(bits), 8):
+            if i + 8 <= len(bits):
+                byte_str = bits[i:i+8]
+                try:
+                    decoded_bytes.append(int(byte_str, 2))
+                except ValueError:
+                    pass
+        
+        try:
+            secret = decoded_bytes.decode('utf-8', errors='ignore')
+            print(f"[client] covert analysis: FOUND PATTERN", flush=True)
+            print(f"COVERT_DATA_JSON: {json.dumps({'bits': bits, 'secret': secret})}", flush=True)
+            print(f"[client] decoded secret: '{secret}'", flush=True)
+        except Exception:
+            print("[client] covert analysis: garbage data", flush=True)
+            
+    return b"".join(chunks)
+
+
 def receive_tcp_response(raw_sock: socket.socket) -> bytes:
     """Handle TCP handshake and receive data"""
     # Send SYN
@@ -182,7 +235,21 @@ def main() -> None:
 
     trigger_data = json.dumps({"text": "hello", "scenario": SCENARIO}).encode()
 
-    if SCENARIO in [1, 2]:
+    trigger_data = json.dumps({"text": "hello", "scenario": SCENARIO}).encode()
+    
+    if SCENARIO == 6:
+        # UDP with timing analysis
+        print("[client] using UDP with Timing Analysis", flush=True)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((CLIENT_IP, UDP_PORT))
+
+        sock.sendto(trigger_data, (SERVER_IP, UDP_PORT))
+        print("[client] trigger sent", flush=True)
+
+        payload = receive_udp_with_timing_decoding(sock)
+        sock.close()
+
+    elif SCENARIO in [1, 2]:
         # UDP scenarios: use standard UDP socket
         print("[client] using UDP", flush=True)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

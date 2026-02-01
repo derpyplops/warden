@@ -227,6 +227,36 @@ def generate_html(
     """
 
 
+def generate_text_report(title: str, file_path: str) -> str:
+    if not os.path.exists(file_path):
+        return f"""
+        <div class="test-card failure">
+            <div class="test-header">
+                <div class="test-title">
+                    <span class="test-icon">✗</span>
+                    <h2>{title}</h2>
+                </div>
+            </div>
+            <p class="test-desc">Report file missing: {file_path}</p>
+        </div>
+        """
+        
+    with open(file_path, "r") as f:
+        content = f.read()
+        
+    return f"""
+    <div class="test-card">
+        <div class="test-header">
+            <div class="test-title">
+                <span class="test-icon">ℹ</span>
+                <h2>{title}</h2>
+            </div>
+        </div>
+        <div class="pkt-payload" style="max-width: none; white-space: pre-wrap; font-family: 'JetBrains Mono', monospace; color: var(--text-dim); background: var(--bg-elevated); padding: 1rem; border-radius: 8px;">{content}</div>
+    </div>
+    """
+
+
 def main():
     html_parts = []
 
@@ -266,11 +296,23 @@ def main():
             "/data/capture_6.pcap",
             "FAIL",
         ),
+        (
+            "Test 6: Steganography Defeated (IP Options Zeroed)",
+            "Comparing normal Capture 4 vs Stego Capture 6. Note: visualize.py uses standard normalization (preserves options), so packet structure differences will be visible.",
+            "/data/capture_4.pcap",
+            "/data/capture_6.pcap",
+            "FAIL",
+        ),
     ]
 
     for test_name, test_desc, cap1, cap2, expected in tests:
         if os.path.exists(cap1) and os.path.exists(cap2):
             html_parts.append(generate_html(test_name, test_desc, cap1, cap2, expected))
+
+    # Add Timing Analysis Reports
+    html_parts.append(generate_text_report("Test 7: Covert Timing Analysis (Vulnerable)", "/data/test7_analysis.txt"))
+    html_parts.append(generate_text_report("Test 8: Covert Timing Analysis (Secure)", "/data/test8_analysis.txt"))
+    html_parts.append(generate_text_report("Comparative Latency Analysis", "/data/timing_comparison.txt"))
 
     full_html = f"""<!DOCTYPE html>
 <html lang="en">

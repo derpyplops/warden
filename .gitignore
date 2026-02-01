@@ -1,1 +1,8 @@
 .mypy_cache
+__pycache__
+*.pyc
+
+# macos finder specific files
+.DS_Store
+
+data/*
