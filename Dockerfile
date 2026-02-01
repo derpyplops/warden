@@ -6,6 +6,9 @@ RUN apt-get update && \
         tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
+# Install scapy for packet manipulation
+RUN pip install --no-cache-dir scapy
+
 WORKDIR /app
 
 COPY server.py client.py analyze.py visualize.py run.sh sample.json ./

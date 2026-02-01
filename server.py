@@ -1,7 +1,13 @@
 """
 Warden server: precomputes deterministic Ethernet frames from a JSON payload,
 listens for a UDP trigger on an AF_PACKET raw socket, then sends the
-precomputed frames in order.
+precomputed frames in order based on the scenario specified in the trigger.
+
+Supports 4 scenarios:
+1. UDP normal response
+2. UDP response with tampered data
+3. TCP normal response
+4. TCP response with tampered data
 """
 
 import struct
@@ -9,83 +15,126 @@ import socket
 import json
 import sys
 import argparse
+from scapy.all import Ether, IP, UDP, TCP, Raw
 
 # --- Configuration ---
 IFACE = "veth-s"
 SERVER_IP = "10.0.0.1"
 CLIENT_IP = "10.0.0.2"
-SERVER_MAC = bytes.fromhex("02000a000001")  # 02:00:0a:00:00:01
-CLIENT_MAC = bytes.fromhex("02000a000002")  # 02:00:0a:00:00:02
+SERVER_MAC = "02:00:0a:00:00:01"
+CLIENT_MAC = "02:00:0a:00:00:02"
 SRC_PORT = 5000
 DST_PORT = 5000
-MAX_PAYLOAD = 1472  # 1500 MTU - 20 (IP) - 8 (UDP)
+TCP_PORT = 5000
+UDP_PORT = 5000
+MAX_PAYLOAD_UDP = 1472  # 1500 MTU - 20 (IP) - 8 (UDP)
+MAX_PAYLOAD_TCP = 1432  # 1500 MTU - 20 (IP) - 20 (TCP) - extra overhead
+INITIAL_SEQ_SERVER = 1000
+INITIAL_SEQ_CLIENT = 2000
+TCP_WINDOW = 65535
 
 
-def ip_checksum(header_bytes: bytes) -> int:
-    if len(header_bytes) % 2:
-        header_bytes += b"\x00"
-    s = 0
-    for i in range(0, len(header_bytes), 2):
-        s += (header_bytes[i] << 8) | header_bytes[i + 1]
-    while s >> 16:
-        s = (s & 0xFFFF) + (s >> 16)
-    return ~s & 0xFFFF
+def build_udp_frame(ip_id: int, chunk: bytes) -> bytes:
+    """Build UDP frame using Scapy"""
+    pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
+          IP(src=SERVER_IP, dst=CLIENT_IP, id=ip_id, flags="DF") / \
+          UDP(sport=SRC_PORT, dport=DST_PORT, chksum=0) / \
+          Raw(load=chunk)
+    return bytes(pkt)
 
 
-def build_ip_header(payload_len: int, ip_id: int) -> bytes:
-    version_ihl = 0x45
-    tos = 0
-    total_len = 20 + 8 + payload_len
-    flags_frag = 0x4000  # DF bit set
-    ttl = 64
-    protocol = 17  # UDP
-    src = socket.inet_aton(SERVER_IP)
-    dst = socket.inet_aton(CLIENT_IP)
-
-    # First pass: checksum field = 0
-    hdr = struct.pack(
-        "!BBHHHBBH4s4s",
-        version_ihl, tos, total_len,
-        ip_id, flags_frag,
-        ttl, protocol, 0,
-        src, dst,
-    )
-    csum = ip_checksum(hdr)
-    return struct.pack(
-        "!BBHHHBBH4s4s",
-        version_ihl, tos, total_len,
-        ip_id, flags_frag,
-        ttl, protocol, csum,
-        src, dst,
-    )
+def build_tcp_syn_ack() -> bytes:
+    """Server responds with SYN-ACK to client's SYN"""
+    pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
+          IP(src=SERVER_IP, dst=CLIENT_IP, id=0, flags="DF") / \
+          TCP(sport=TCP_PORT, dport=TCP_PORT,
+              flags="SA", seq=INITIAL_SEQ_SERVER,
+              ack=INITIAL_SEQ_CLIENT + 1,
+              window=TCP_WINDOW)
+    return bytes(pkt)
 
 
-def build_udp_header(payload_len: int) -> bytes:
-    udp_len = 8 + payload_len
-    return struct.pack("!HHHH", SRC_PORT, DST_PORT, udp_len, 0)  # checksum = 0 (valid in IPv4)
+def build_tcp_data_frame(ip_id: int, seq: int, chunk: bytes) -> bytes:
+    """Build TCP data frame with PSH+ACK flags"""
+    pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
+          IP(src=SERVER_IP, dst=CLIENT_IP, id=ip_id, flags="DF") / \
+          TCP(sport=TCP_PORT, dport=TCP_PORT,
+              flags="PA", seq=seq,
+              ack=INITIAL_SEQ_CLIENT + 1,
+              window=TCP_WINDOW) / \
+          Raw(load=chunk)
+    return bytes(pkt)
 
 
-def build_frame(ip_id: int, chunk: bytes) -> bytes:
-    ip_hdr = build_ip_header(len(chunk), ip_id)
-    udp_hdr = build_udp_header(len(chunk))
-    eth = CLIENT_MAC + SERVER_MAC + struct.pack("!H", 0x0800)
-    return eth + ip_hdr + udp_hdr + chunk
+def build_tcp_fin_ack(seq: int, ack: int) -> bytes:
+    """Server closes connection with FIN+ACK"""
+    pkt = Ether(dst=CLIENT_MAC, src=SERVER_MAC) / \
+          IP(src=SERVER_IP, dst=CLIENT_IP, id=0, flags="DF") / \
+          TCP(sport=TCP_PORT, dport=TCP_PORT,
+              flags="FA", seq=seq, ack=ack,
+              window=TCP_WINDOW)
+    return bytes(pkt)
 
 
-def precompute_frames(payload: bytes) -> list[bytes]:
+def precompute_udp_frames(payload: bytes) -> list[bytes]:
+    """Precompute UDP data frames from payload"""
     frames = []
     offset = 0
     ip_id = 0
     while offset < len(payload):
-        chunk = payload[offset : offset + MAX_PAYLOAD]
-        frames.append(build_frame(ip_id, chunk))
-        offset += MAX_PAYLOAD
+        chunk = payload[offset : offset + MAX_PAYLOAD_UDP]
+        frames.append(build_udp_frame(ip_id, chunk))
+        offset += MAX_PAYLOAD_UDP
         ip_id += 1
     return frames
 
 
-def wait_for_trigger(sock: socket.socket) -> None:
-    """Block until we see an incoming UDP packet destined for our port."""
+def precompute_tcp_frames(payload: bytes) -> list[bytes]:
+    """Precompute TCP data frames from payload"""
+    frames = []
+    offset = 0
+    ip_id = 1
+    seq = INITIAL_SEQ_SERVER + 1  # After SYN-ACK
+
+    while offset < len(payload):
+        chunk = payload[offset : offset + MAX_PAYLOAD_TCP]
+        frames.append(build_tcp_data_frame(ip_id, seq, chunk))
+        offset += MAX_PAYLOAD_TCP
+        seq += len(chunk)
+        ip_id += 1
+
+    return frames
+
+
+def parse_trigger_json(pkt: bytes) -> int:
+    """
+    Extract scenario from UDP trigger JSON payload.
+    UDP payload starts at offset 42 (Eth 14 + IP 20 + UDP 8).
+    Defaults to scenario 1 if missing or invalid.
+    """
+    if len(pkt) < 42:
+        return 1
+
+    try:
+        payload = pkt[42:]
+        data = json.loads(payload.decode('utf-8', errors='ignore'))
+        scenario = data.get("scenario", 1)
+
+        # Validate scenario is in range
+        if isinstance(scenario, int) and 1 <= scenario <= 4:
+            return scenario
+        else:
+            print(f"[server] invalid scenario {scenario}, defaulting to 1", flush=True)
+            return 1
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return 1
+
+
+def wait_for_trigger(sock: socket.socket) -> int:
+    """
+    Block until we see an incoming UDP packet destined for our port.
+    Returns the scenario number from the trigger JSON.
+    """
     while True:
         pkt = sock.recv(65535)
         if len(pkt) < 42:
@@ -94,19 +143,145 @@ def wait_for_trigger(sock: socket.socket) -> None:
         if ethertype != 0x0800:
             continue
         protocol = pkt[23]
-        if protocol != 17:
+        if protocol != 17:  # UDP
             continue
         dst_port = struct.unpack("!H", pkt[36:38])[0]
         if dst_port == SRC_PORT:
-            return
+            scenario = parse_trigger_json(pkt)
+            return scenario
+
+
+def handle_scenario_1(payload: bytes, sock: socket.socket) -> None:
+    """UDP normal response"""
+    frames = precompute_udp_frames(payload)
+    print(f"[server] scenario 1: sending {len(frames)} UDP frames (normal)", flush=True)
+    for frame in frames:
+        sock.sendto(frame, (IFACE, 0))
+
+
+def handle_scenario_2(payload: bytes, sock: socket.socket) -> None:
+    """UDP response with tampered data (byte 50 in frame 15)"""
+    frames = precompute_udp_frames(payload)
+
+    # Tamper: XOR byte at offset 50 (which is inside the UDP payload for UDP frames)
+    idx = min(15, len(frames) - 1)
+    f = bytearray(frames[idx])
+    f[50] ^= 0xFF
+    frames[idx] = bytes(f)
+
+    print(f"[server] scenario 2: sending {len(frames)} UDP frames (tampered at frame {idx} byte 50)", flush=True)
+    for frame in frames:
+        sock.sendto(frame, (IFACE, 0))
+
+
+def handle_scenario_3(payload: bytes, sock: socket.socket) -> None:
+    """TCP normal response"""
+    frames = precompute_tcp_frames(payload)
+
+    print(f"[server] scenario 3: waiting for TCP SYN ...", flush=True)
+    # Wait for TCP SYN from client
+    while True:
+        pkt = sock.recv(65535)
+        if len(pkt) < 54:
+            continue
+        protocol = pkt[23]
+        if protocol != 6:  # TCP
+            continue
+        tcp_flags = pkt[47]
+        if tcp_flags & 0x02:  # SYN flag
+            break
+
+    # Send SYN-ACK
+    syn_ack = build_tcp_syn_ack()
+    sock.sendto(syn_ack, (IFACE, 0))
+    print(f"[server] scenario 3: sent SYN-ACK", flush=True)
+
+    # Wait for ACK
+    while True:
+        pkt = sock.recv(65535)
+        if len(pkt) < 54:
+            continue
+        protocol = pkt[23]
+        if protocol != 6:  # TCP
+            continue
+        tcp_flags = pkt[47]
+        if tcp_flags & 0x10:  # ACK flag
+            break
+
+    print(f"[server] scenario 3: received ACK, sending {len(frames)} TCP data frames (normal)", flush=True)
+
+    # Send data frames
+    for frame in frames:
+        sock.sendto(frame, (IFACE, 0))
+
+    # Send FIN-ACK (sequence continues from last data frame)
+    last_seq = INITIAL_SEQ_SERVER + 1 + len(payload)
+    fin_ack = build_tcp_fin_ack(last_seq, INITIAL_SEQ_CLIENT + 1)
+    sock.sendto(fin_ack, (IFACE, 0))
+    print(f"[server] scenario 3: sent FIN-ACK", flush=True)
+
+
+def handle_scenario_4(payload: bytes, sock: socket.socket) -> None:
+    """TCP response with tampered data (byte at offset 50 in frame 15 payload)"""
+    frames = precompute_tcp_frames(payload)
+
+    # Tamper: XOR byte at offset 50 in the TCP payload
+    # For TCP frames: Eth(14) + IP(20) + TCP(20) + payload
+    # So byte 50 in payload = byte 54 in frame
+    idx = min(15, len(frames) - 1)
+    f = bytearray(frames[idx])
+    # Ensure we don't go out of bounds
+    if len(f) > 54 + 50:
+        f[54 + 50] ^= 0xFF
+        frames[idx] = bytes(f)
+
+    print(f"[server] scenario 4: waiting for TCP SYN ...", flush=True)
+    # Wait for TCP SYN from client
+    while True:
+        pkt = sock.recv(65535)
+        if len(pkt) < 54:
+            continue
+        protocol = pkt[23]
+        if protocol != 6:  # TCP
+            continue
+        tcp_flags = pkt[47]
+        if tcp_flags & 0x02:  # SYN flag
+            break
+
+    # Send SYN-ACK
+    syn_ack = build_tcp_syn_ack()
+    sock.sendto(syn_ack, (IFACE, 0))
+    print(f"[server] scenario 4: sent SYN-ACK", flush=True)
+
+    # Wait for ACK
+    while True:
+        pkt = sock.recv(65535)
+        if len(pkt) < 54:
+            continue
+        protocol = pkt[23]
+        if protocol != 6:  # TCP
+            continue
+        tcp_flags = pkt[47]
+        if tcp_flags & 0x10:  # ACK flag
+            break
+
+    print(f"[server] scenario 4: received ACK, sending {len(frames)} TCP data frames (tampered at frame {idx})", flush=True)
+
+    # Send data frames
+    for frame in frames:
+        sock.sendto(frame, (IFACE, 0))
+
+    # Send FIN-ACK
+    last_seq = INITIAL_SEQ_SERVER + 1 + len(payload)
+    fin_ack = build_tcp_fin_ack(last_seq, INITIAL_SEQ_CLIENT + 1)
+    sock.sendto(fin_ack, (IFACE, 0))
+    print(f"[server] scenario 4: sent FIN-ACK", flush=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", default="/app/sample.json")
-    parser.add_argument("--repeat", type=int, default=1000)
-    parser.add_argument("--tamper", action="store_true",
-                        help="flip one byte in frame 15 to simulate steganography")
+    parser.add_argument("--repeat", type=int, default=12)
     args = parser.parse_args()
 
     with open(args.json, "r") as f:
@@ -115,30 +290,29 @@ def main() -> None:
     response_bytes = (data["text"] * args.repeat).encode("utf-8")
     print(f"[server] payload: {len(response_bytes)} bytes", flush=True)
 
-    frames = precompute_frames(response_bytes)
-    print(f"[server] precomputed {len(frames)} frames", flush=True)
-
-    if args.tamper:
-        # Mutate one payload byte in frame 15 (XOR with 0xff)
-        idx = min(15, len(frames) - 1)
-        f = bytearray(frames[idx])
-        f[50] ^= 0xFF  # byte 50 is inside the UDP payload
-        frames[idx] = bytes(f)
-        print(f"[server] TAMPERED frame {idx} byte 50", flush=True)
-
     # AF_PACKET raw socket — we supply full Ethernet frames
     sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
     sock.bind((IFACE, 0))
 
     print("[server] waiting for trigger ...", flush=True)
-    wait_for_trigger(sock)
-    print("[server] trigger received, sending frames ...", flush=True)
+    scenario = wait_for_trigger(sock)
+    print(f"[server] trigger received with scenario {scenario}", flush=True)
 
-    for frame in frames:
-        sock.sendto(frame, (IFACE, 0))
+    # Handle scenario
+    if scenario == 1:
+        handle_scenario_1(response_bytes, sock)
+    elif scenario == 2:
+        handle_scenario_2(response_bytes, sock)
+    elif scenario == 3:
+        handle_scenario_3(response_bytes, sock)
+    elif scenario == 4:
+        handle_scenario_4(response_bytes, sock)
+    else:
+        print(f"[server] unknown scenario {scenario}, defaulting to 1", flush=True)
+        handle_scenario_1(response_bytes, sock)
 
-    print(f"[server] sent {len(frames)} frames", flush=True)
     sock.close()
+    print("[server] done", flush=True)
 
 
 if __name__ == "__main__":

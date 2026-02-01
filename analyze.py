@@ -34,6 +34,38 @@ def read_pcap(path: str) -> list[bytes]:
     return packets
 
 
+def extract_tcp_payload(pkt: bytes) -> bytes:
+    """Extract payload from TCP packet, return empty if no payload"""
+    if len(pkt) < 54:
+        return b""
+
+    # Check ethertype
+    ethertype = struct.unpack("!H", pkt[12:14])[0]
+    if ethertype != 0x0800:
+        return b""
+
+    # Get IP header and protocol
+    ip = 14
+    proto = pkt[ip + 9]
+    if proto != 6:  # Not TCP
+        return b""
+
+    # Get TCP header offset and flags
+    ihl = (pkt[ip] & 0x0F) * 4
+    tcp = ip + ihl
+    if len(pkt) < tcp + 20:
+        return b""
+
+    # TCP data offset is in upper 4 bits of offset field (offset 12)
+    tcp_data_offset = (pkt[tcp + 12] >> 4) * 4
+    payload_start = tcp + tcp_data_offset
+
+    if len(pkt) <= payload_start:
+        return b""
+
+    return pkt[payload_start:]
+
+
 def normalize(pkt: bytes) -> bytes:
     if len(pkt) < 34:
         return pkt
@@ -63,10 +95,39 @@ def normalize(pkt: bytes) -> bytes:
         buf[udp + 6] = 0
         buf[udp + 7] = 0
 
+    # Zero TCP checksum (offset 16-17 of TCP header)
+    if proto == 6 and len(buf) >= ip + ihl + 20:
+        tcp = ip + ihl
+        buf[tcp + 16] = 0
+        buf[tcp + 17] = 0
+
     return bytes(buf)
 
+def is_data_frame(pkt: bytes) -> bool:
+    """Check if packet has actual data payload (not just control)"""
+    # UDP frames: always have data
+    # TCP frames: must have non-empty payload
+    if len(pkt) < 42:
+        return False
+
+    ethertype = struct.unpack("!H", pkt[12:14])[0]
+    if ethertype != 0x0800:
+        return False
+
+    proto = pkt[23]
+    if proto == 17:  # UDP
+        return True
+    elif proto == 6:  # TCP
+        payload = extract_tcp_payload(pkt)
+        return len(payload) > 0
+
+    return False
+
+
 def simple_warden(pkts: list[bytes]):
-    return [normalize(p) for p in pkts]
+    # Filter to only data frames (skip TCP control packets)
+    data_frames = [p for p in pkts if is_data_frame(p)]
+    return [normalize(p) for p in data_frames]
 
 
 def main() -> None:
@@ -82,6 +143,9 @@ def main() -> None:
 
     norm1 = simple_warden(pkts1)
     norm2 = simple_warden(pkts2)
+
+    print(f"capture 1: {len(norm1)} data frames after filtering")
+    print(f"capture 2: {len(norm2)} data frames after filtering")
 
     h1 = hashlib.sha256(b"".join(norm1)).hexdigest()
     h2 = hashlib.sha256(b"".join(norm2)).hexdigest()
@@ -100,6 +164,12 @@ def main() -> None:
                 for j in range(min(len(norm1[i]), len(norm2[i]))):
                     if norm1[i][j] != norm2[i][j]:
                         print(f"    first diff at byte {j}: 0x{norm1[i][j]:02x} vs 0x{norm2[i][j]:02x}")
+                        # Debug: show more context
+                        if j < 60:
+                            start = max(0, j - 5)
+                            end = min(len(norm1[i]), j + 10)
+                            print(f"    context 1: {norm1[i][start:end].hex()}")
+                            print(f"    context 2: {norm2[i][start:end].hex()}")
                         break
         if len(norm1) != len(norm2):
             print(f"  packet count: {len(norm1)} vs {len(norm2)}")
