@@ -176,6 +176,7 @@ def handle_scenario_2(payload: bytes, sock: socket.socket) -> None:
 
 def handle_scenario_3(payload: bytes, sock: socket.socket) -> None:
     """TCP normal response"""
+    import time
     frames = precompute_tcp_frames(payload)
 
     print(f"[server] scenario 3: waiting for TCP SYN ...", flush=True)
@@ -220,9 +221,13 @@ def handle_scenario_3(payload: bytes, sock: socket.socket) -> None:
     sock.sendto(fin_ack, (IFACE, 0))
     print(f"[server] scenario 3: sent FIN-ACK", flush=True)
 
+    # Ensure all packets are flushed
+    time.sleep(0.2)
+
 
 def handle_scenario_4(payload: bytes, sock: socket.socket) -> None:
     """TCP response with tampered data (byte at offset 50 in frame 15 payload)"""
+    import time
     frames = precompute_tcp_frames(payload)
 
     # Tamper: XOR byte at offset 50 in the TCP payload
@@ -276,6 +281,9 @@ def handle_scenario_4(payload: bytes, sock: socket.socket) -> None:
     fin_ack = build_tcp_fin_ack(last_seq, INITIAL_SEQ_CLIENT + 1)
     sock.sendto(fin_ack, (IFACE, 0))
     print(f"[server] scenario 4: sent FIN-ACK", flush=True)
+
+    # Ensure all packets are flushed
+    time.sleep(0.2)
 
 
 def main() -> None:
