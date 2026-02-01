@@ -79,6 +79,15 @@ def parse_packet(raw: bytes) -> Packet:
             src_port = struct.unpack("!H", raw[udp : udp + 2])[0]
             dst_port = struct.unpack("!H", raw[udp + 2 : udp + 4])[0]
             payload = raw[udp + 8 :]
+        elif ip_proto == 6 and len(raw) >= ip + ihl + 20:  # TCP
+            tcp = ip + ihl
+            src_port = struct.unpack("!H", raw[tcp : tcp + 2])[0]
+            dst_port = struct.unpack("!H", raw[tcp + 2 : tcp + 4])[0]
+            # TCP data offset is in upper 4 bits of byte 12
+            tcp_data_offset = (raw[tcp + 12] >> 4) * 4
+            payload_start = tcp + tcp_data_offset
+            if len(raw) > payload_start:
+                payload = raw[payload_start:]
 
     return Packet(
         raw=raw,
@@ -223,25 +232,32 @@ def main():
 
     tests = [
         (
-            "Test 1: Reproducibility",
-            "Two identical runs should produce identical (normalized) traffic. This validates the deterministic setup.",
+            "Test 1: UDP Reproducibility",
+            "Two identical UDP runs (scenario 1) should produce identical (normalized) traffic.",
             "/data/capture_1.pcap",
             "/data/capture_2.pcap",
             "PASS",
         ),
         (
-            "Test 2: Tamper Detection",
-            "Server tampers with the response payload. The analyzer should detect the difference.",
+            "Test 2: UDP Tamper Detection",
+            "Server tampers byte 50 of UDP payload (scenario 2). The difference should be detected.",
             "/data/capture_1.pcap",
             "/data/capture_3.pcap",
             "FAIL",
         ),
         (
-            "Test 3: Steganography Detection",
-            "Client attempts to exfiltrate data via a hidden UDP packet. The extra packet should be detected.",
-            "/data/capture_1.pcap",
+            "Test 3: TCP Scenario 3 (Normal)",
+            "TCP connection with normal data transfer (scenario 3). Shows handshake and data frames.",
             "/data/capture_4.pcap",
-            "FAIL",
+            "/data/capture_4.pcap",
+            "PASS",
+        ),
+        (
+            "Test 4: TCP Scenario 4 (Tampered)",
+            "TCP connection with tampered payload (scenario 4). Byte 50 in payload is XORed.",
+            "/data/capture_5.pcap",
+            "/data/capture_5.pcap",
+            "PASS",
         ),
     ]
 
