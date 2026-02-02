@@ -57,10 +57,10 @@
         }
 
         @keyframes flow {
-            0% { transform: translateX(0); opacity: 0;}
+            0% { transform: translate(0, 0); opacity: 0;}
             10% { opacity: 1; }
             90% { opacity: 1; }
-            100% { transform: translateX(100%); opacity: 0;}
+            100% { transform: translate(var(--flow-x, 100%), var(--flow-y, 0)); opacity: 0;}
         }
     </style>
 </head>
@@ -120,7 +120,7 @@
 
         // --- Interactive Modules ---
 
-        // 1. Architecture Visualization
+        // 1. Architecture Visualization (Responsive stack)
         const ArchitectureViz = () => {
             const [packets, setPackets] = useState([]);
             const [logs, setLogs] = useState([]);
@@ -129,13 +129,12 @@
                 const id = Date.now();
                 setPackets(prev => [...prev, { id, stage: 0 }]);
                 
-                // Animate packet through stages
-                setTimeout(() => updatePacketStage(id, 1), 1000); // To Border Patrol
+                setTimeout(() => updatePacketStage(id, 1), 1000); 
                 setTimeout(() => {
-                    updatePacketStage(id, 2); // Split to Verifier
+                    updatePacketStage(id, 2); 
                     addLog(); 
                 }, 2000);
-                setTimeout(() => updatePacketStage(id, 3), 3000); // To Internet
+                setTimeout(() => updatePacketStage(id, 3), 3000); 
                 setTimeout(() => removePacket(id), 4000);
             };
 
@@ -153,23 +152,29 @@
 
             return (
                 <Card title="Concept: The Border Patrol Architecture" icon={Activity} className="mb-8">
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative pt-48"> {/* Increased padding top for Verifier node */}
+                    <div className="relative flex flex-col lg:flex-row items-center justify-between gap-12 lg:gap-8 pt-4 lg:pt-48 pb-12 lg:pb-0">
+                        {/* Connection Line - Desktop Horizontal */}
+                        <div className="hidden lg:block absolute top-[232px] left-12 right-12 h-1 bg-slate-800 rounded -z-0"></div>
+                        {/* Connection Line - Mobile Vertical */}
+                        <div className="lg:hidden absolute left-1/2 top-12 bottom-24 w-1 bg-slate-800 rounded -z-0 transform -translateX-1/2"></div>
+
                         {/* Nodes */}
                         <div className="flex flex-col items-center z-10">
-                            <div className="w-24 h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700 shadow-[0_0_20px_rgba(30,41,59,0.5)]">
-                                <Server size={40} className="text-blue-400" />
+                            <div className="w-20 h-20 md:w-24 md:h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700 shadow-[0_0_20px_rgba(30,41,59,0.5)]">
+                                <Server size={32} className="text-blue-400 md:hidden" />
+                                <Server size={40} className="text-blue-400 hidden md:block" />
                             </div>
                             <p className="mt-3 font-bold text-slate-200">AI Cluster</p>
                             <p className="text-xs text-slate-500 uppercase">The Prover</p>
                         </div>
 
                         <div className="flex flex-col items-center relative z-10">
-                            {/* Verifier Entity (Moved Above) */}
-                            <div className="absolute -top-40 w-44 bg-slate-900 border-2 border-slate-700 p-3 rounded-xl text-xs font-mono shadow-2xl z-20">
+                            {/* Verifier Entity - Positioned above on desktop, to the side on mobile */}
+                            <div className="absolute -top-4 md:-top-40 lg:-top-40 left-28 lg:left-1/2 lg:-translate-x-1/2 w-36 md:w-44 bg-slate-900 border-2 border-slate-700 p-3 rounded-xl text-[10px] md:text-xs font-mono shadow-2xl z-20">
                                 <div className="flex items-center gap-2 mb-2 text-indigo-400 font-bold border-b border-slate-800 pb-1 uppercase tracking-tight">
                                     <Eye size={12}/> The Verifier
                                 </div>
-                                <div className="text-[10px] text-slate-500 mb-2 italic">Evidence Log (H+T)</div>
+                                <div className="text-[9px] md:text-[10px] text-slate-500 mb-2 italic">Evidence Log (H+T)</div>
                                 <div className="space-y-1">
                                     {logs.map((l, i) => <div key={i} className="text-emerald-500 opacity-90 truncate">{l}</div>)}
                                     {logs.length === 0 && <span className="opacity-30">Waiting for tap...</span>}
@@ -177,44 +182,54 @@
                             </div>
 
                             {/* Warden Node */}
-                            <div className="w-24 h-24 bg-emerald-950/30 rounded-2xl flex items-center justify-center border-2 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.2)] relative">
-                                <Shield size={40} className="text-emerald-400" />
-                                {/* Optical Tap Line - now going UP to separate the log */}
-                                <div className="absolute -top-16 w-1 h-16 bg-gradient-to-t from-emerald-500/50 via-emerald-500/30 to-slate-800/50 border-r border-dashed border-emerald-500/40"></div>
+                            <div className="w-20 h-20 md:w-24 md:h-24 bg-emerald-950/30 rounded-2xl flex items-center justify-center border-2 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.2)] relative">
+                                <Shield size={32} className="text-emerald-400 md:hidden" />
+                                <Shield size={40} className="text-emerald-400 hidden md:block" />
+                                {/* Optical Tap Line */}
+                                <div className="absolute -top-16 lg:-top-16 lg:left-1/2 left-[120px] lg:translate-x-0 w-16 lg:w-1 h-1 lg:h-16 bg-gradient-to-r lg:bg-gradient-to-t from-emerald-500/50 via-emerald-500/30 to-slate-800/50 border-t lg:border-t-0 lg:border-r border-dashed border-emerald-500/40"></div>
                             </div>
                             <p className="mt-3 font-bold text-emerald-400">Active Warden</p>
-                            <p className="text-xs text-emerald-600/70 uppercase">Border Patrol Hardware</p>
+                            <p className="text-xs text-emerald-600/70 uppercase text-center leading-tight">Border Patrol Hardware</p>
                         </div>
 
                         <div className="flex flex-col items-center z-10">
-                            <div className="w-24 h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700">
-                                <Globe size={40} className="text-indigo-400" />
+                            <div className="w-20 h-20 md:w-24 md:h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700">
+                                <Globe size={32} className="text-indigo-400 md:hidden" />
+                                <Globe size={40} className="text-indigo-400 hidden md:block" />
                             </div>
                             <p className="mt-3 font-bold text-slate-200">Internet</p>
                             <p className="text-xs text-slate-500 uppercase">Public Users</p>
                         </div>
 
-                        {/* Connection Lines (Relative to the pt-48 offset) */}
-                        <div className="absolute top-[232px] left-12 right-12 h-1 bg-slate-800 rounded -z-0"></div>
-
-                        {/* Moving Packets */}
+                        {/* Moving Packets - Logic switches based on lg breakpoint */}
                         {packets.map(p => {
-                            let left = '10%';
-                            if (p.stage === 1) left = '50%';
-                            if (p.stage === 2) left = '50%'; 
-                            if (p.stage === 3) left = '90%';
+                            const isLg = window.innerWidth >= 1024;
+                            let left = isLg ? '10%' : '50%';
+                            let top = isLg ? '232px' : '10%';
+
+                            if (isLg) {
+                                if (p.stage === 1) left = '50%';
+                                if (p.stage === 2) left = '50%'; 
+                                if (p.stage === 3) left = '90%';
+                            } else {
+                                // Mobile vertical top positions (approx based on node spacing)
+                                if (p.stage === 0) top = '48px';
+                                if (p.stage === 1) top = '170px';
+                                if (p.stage === 2) top = '170px';
+                                if (p.stage === 3) top = '300px';
+                            }
 
                             return (
                                 <div 
                                     key={p.id}
-                                    className="absolute top-[224px] w-4 h-4 bg-white rounded-full shadow-[0_0_15px_white] transition-all duration-1000 ease-linear z-20"
-                                    style={{ left, transform: 'translateX(-50%)' }}
+                                    className="absolute w-3 h-3 md:w-4 md:h-4 bg-white rounded-full shadow-[0_0_15px_white] transition-all duration-1000 ease-linear z-20"
+                                    style={{ left, top, transform: 'translateX(-50%) translateY(-50%)' }}
                                 />
                             );
                         })}
                     </div>
 
-                    <div className="mt-12 flex justify-center">
+                    <div className="mt-8 lg:mt-12 flex justify-center">
                         <button 
                             onClick={sendPacket}
                             className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg shadow-emerald-900/20 active:scale-95 transform duration-100"
@@ -241,49 +256,52 @@
 
             return (
                 <Card title="Microarchitecture: The Active Warden" icon={Lock} className="mb-8">
-                    <div className="flex flex-col md:flex-row items-center gap-8 justify-between">
-                        <div className="flex-1 space-y-4">
+                    <div className="flex flex-col xl:flex-row items-center gap-8 justify-between">
+                        <div className="w-full flex-1 space-y-4">
                             <p className="text-slate-400 text-sm leading-relaxed">
                                 The Warden acts as a sanitizing gateway. It takes "dirty" packets (potentially containing steganography in headers) and "scrubs" them. 
                                 Hover over the packet fields below to see what happens.
                             </p>
                             
-                            <div className="flex items-center gap-1 bg-black/40 p-4 rounded-xl border border-slate-800 overflow-x-auto">
+                            <div className="flex items-center gap-1 bg-black/40 p-3 md:p-4 rounded-xl border border-slate-800 overflow-x-auto no-scrollbar">
                                 {packetFields.map(field => (
                                     <div 
                                         key={field.id}
                                         onMouseEnter={() => setHoveredField(field)}
                                         onMouseLeave={() => setHoveredField(null)}
-                                        className={`flex-shrink-0 w-24 h-20 ${field.color} rounded-lg flex flex-col items-center justify-center p-2 cursor-help transition-all duration-300 ${hoveredField?.id === field.id ? 'scale-105 ring-2 ring-white' : 'opacity-90'}`}
+                                        className={`flex-shrink-0 min-w-[100px] md:min-w-[120px] h-16 md:h-20 ${field.color} rounded-lg flex flex-col items-center justify-center p-2 cursor-help transition-all duration-300 ${hoveredField?.id === field.id ? 'scale-105 ring-2 ring-white' : 'opacity-90'}`}
                                     >
-                                        <span className="text-[10px] font-bold opacity-70 mb-1">{field.label}</span>
-                                        <span className="text-xs font-mono text-center leading-tight">{field.val}</span>
+                                        <span className="text-[9px] md:text-[10px] font-bold opacity-70 mb-1">{field.label}</span>
+                                        <span className="text-[10px] md:text-xs font-mono text-center leading-tight">{field.val}</span>
                                     </div>
                                 ))}
                             </div>
 
-                            <div className="h-12 flex items-center">
+                            <div className="h-10 md:h-12 flex items-center">
                                 {hoveredField ? (
-                                    <div className="flex items-center gap-2 text-sm text-emerald-400 fade-in bg-emerald-950/30 px-3 py-2 rounded border border-emerald-900/50">
-                                        <Shield size={16} /> {hoveredField.tooltip}
+                                    <div className="flex items-center gap-2 text-[11px] md:text-sm text-emerald-400 fade-in bg-emerald-950/30 px-3 py-2 rounded border border-emerald-900/50">
+                                        <Shield size={14} className="md:w-4 md:h-4" /> {hoveredField.tooltip}
                                     </div>
                                 ) : (
-                                    <span className="text-slate-600 text-sm italic">Hover packet segments for details...</span>
+                                    <span className="text-slate-600 text-xs md:text-sm italic">Hover packet segments for details...</span>
                                 )}
                             </div>
                         </div>
 
-                        <div className="flex flex-col items-center gap-4 min-w-[200px] border-l border-slate-800 pl-8">
-                            <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-500 ${isScrubbed ? 'bg-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.4)]' : 'bg-slate-700'}`}>
-                                <RefreshCw size={32} className={`text-white transition-transform duration-700 ${isScrubbed ? 'rotate-180' : ''}`} />
+                        <div className="w-full xl:w-auto flex flex-row xl:flex-col items-center justify-center gap-4 border-t xl:border-t-0 xl:border-l border-slate-800 pt-6 xl:pt-0 xl:pl-8">
+                            <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center transition-all duration-500 ${isScrubbed ? 'bg-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.4)]' : 'bg-slate-700'}`}>
+                                <RefreshCw size={24} className={`text-white transition-transform duration-700 md:hidden ${isScrubbed ? 'rotate-180' : ''}`} />
+                                <RefreshCw size={32} className={`text-white transition-transform duration-700 hidden md:block ${isScrubbed ? 'rotate-180' : ''}`} />
                             </div>
-                            <button 
-                                onClick={() => setIsScrubbed(!isScrubbed)}
-                                className={`px-6 py-2 rounded-lg font-bold transition-all w-full border ${isScrubbed ? 'bg-slate-800 border-emerald-500 text-emerald-400' : 'bg-emerald-600 border-transparent text-white hover:bg-emerald-500'}`}
-                            >
-                                {isScrubbed ? 'Reset Warden' : 'Activate Scrubbing'}
-                            </button>
-                            <span className="text-xs text-slate-500 uppercase font-mono">{isScrubbed ? 'Traffic: Reproducible' : 'Traffic: Dirty'}</span>
+                            <div className="flex flex-col items-start xl:items-center gap-1">
+                                <button 
+                                    onClick={() => setIsScrubbed(!isScrubbed)}
+                                    className={`px-4 md:px-6 py-2 rounded-lg font-bold transition-all border text-xs md:text-base ${isScrubbed ? 'bg-slate-800 border-emerald-500 text-emerald-400' : 'bg-emerald-600 border-transparent text-white hover:bg-emerald-500'}`}
+                                >
+                                    {isScrubbed ? 'Reset Warden' : 'Activate Scrubbing'}
+                                </button>
+                                <span className="text-[9px] md:text-xs text-slate-500 uppercase font-mono">{isScrubbed ? 'Traffic: Reproducible' : 'Traffic: Dirty'}</span>
+                            </div>
                         </div>
                     </div>
                 </Card>
@@ -311,34 +329,34 @@
 
             return (
                 <Card title="The Replay Check" icon={CheckCircle} className="mb-8">
-                    <p className="mb-6 text-slate-400">
+                    <p className="mb-6 text-slate-400 text-sm md:text-base">
                         The Verifier replays the declared workload and compares the hash of the traffic. 
                         Try editing the payload below. If the Prover hides data (steganography), the traffic changes, the hash changes, and verification fails.
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500 uppercase">Prover (Datacenter)</label>
+                            <label className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Prover (Datacenter)</label>
                             <textarea 
                                 value={proverText}
                                 onChange={(e) => setProverText(e.target.value)}
-                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
+                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-xs md:text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                             <div className="flex items-center justify-between bg-slate-800 p-3 rounded-lg border border-slate-700">
-                                <span className="text-xs text-slate-500">Hash Output</span>
-                                <span className="font-mono text-emerald-400 font-bold">{pHash}</span>
+                                <span className="text-[10px] text-slate-500">Hash Output</span>
+                                <span className="font-mono text-emerald-400 font-bold text-xs md:text-sm">{pHash}</span>
                             </div>
                         </div>
 
                         <div className="space-y-2">
-                            <label className="text-xs font-bold text-slate-500 uppercase">Verifier (Replay)</label>
+                            <label className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Verifier (Replay)</label>
                             <textarea 
                                 value={verifierText}
                                 onChange={(e) => setVerifierText(e.target.value)}
-                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
+                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-xs md:text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
                             />
                             <div className="flex items-center justify-between bg-slate-800 p-3 rounded-lg border border-slate-700">
-                                <span className="text-xs text-slate-500">Hash Output</span>
-                                <span className="font-mono text-blue-400 font-bold">{vHash}</span>
+                                <span className="text-[10px] text-slate-500">Hash Output</span>
+                                <span className="font-mono text-blue-400 font-bold text-xs md:text-sm">{vHash}</span>
                             </div>
                         </div>
                     </div>
@@ -346,13 +364,13 @@
                     <div className={`mt-6 p-4 rounded-xl border flex items-center justify-center gap-3 transition-colors duration-500 ${match ? 'bg-emerald-900/20 border-emerald-800/50' : 'bg-rose-900/20 border-rose-800/50'}`}>
                         {match ? (
                             <>
-                                <CheckCircle className="text-emerald-500" size={24} />
-                                <span className="text-emerald-400 font-bold text-lg">Verification Successful: Hashes Match</span>
+                                <CheckCircle className="text-emerald-500 flex-shrink-0" size={20} />
+                                <span className="text-emerald-400 font-bold text-sm md:text-lg">Verification Successful: Hashes Match</span>
                             </>
                         ) : (
                             <>
-                                <AlertTriangle className="text-rose-500" size={24} />
-                                <span className="text-rose-400 font-bold text-lg">Mismatch Detected: Potential Covert Activity</span>
+                                <AlertTriangle className="text-rose-500 flex-shrink-0" size={20} />
+                                <span className="text-rose-400 font-bold text-sm md:text-lg">Mismatch Detected: Potential Covert Activity</span>
                             </>
                         )}
                     </div>
@@ -364,18 +382,18 @@
 
         const App = () => {
             return (
-                <div className="max-w-5xl mx-auto px-6 py-12 md:py-20">
+                <div className="max-w-5xl mx-auto px-4 md:px-6 py-12 md:py-20">
                     
                     {/* Header */}
-                    <div className="mb-16 fade-in">
-                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 text-xs font-mono mb-6">
+                    <div className="mb-12 md:mb-16 fade-in">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 text-[10px] md:text-xs font-mono mb-4 md:mb-6">
                             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                             ACTIVE MONITORING PROTOCOL
                         </div>
-                        <h1 className="text-4xl md:text-6xl font-extrabold text-white tracking-tight leading-tight mb-6">
-                            Fingerprinting of All AI Cluster Usage <span className="text-slate-600 block text-2xl md:text-3xl mt-2 font-semibold">Without Mutually Trusted Hardware</span>
+                        <h1 className="text-3xl md:text-4xl lg:text-6xl font-extrabold text-white tracking-tight leading-tight mb-6">
+                            Fingerprinting of All AI Cluster Usage <span className="text-slate-600 block text-lg md:text-2xl lg:text-3xl mt-2 font-semibold">Without Mutually Trusted Hardware</span>
                         </h1>
-                        <div className="flex flex-wrap gap-4 text-slate-400 text-sm font-mono mt-8">
+                        <div className="flex flex-wrap gap-4 text-slate-400 text-xs font-mono mt-8">
                             <a href="https://nacicankaya.substack.com/" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
                                 <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">NC</div> Naci Cankaya
                             </a>
@@ -396,12 +414,12 @@
                     </div>
 
                     {/* Abstract */}
-                    <Card className="mb-16 bg-gradient-to-br from-slate-900 to-slate-900/50 border-emerald-900/30">
-                        <h2 className="text-emerald-500 font-bold mb-4 uppercase tracking-wider text-sm">Abstract</h2>
-                        <p className="text-lg text-slate-300 leading-relaxed">
+                    <Card className="mb-12 md:mb-16 bg-gradient-to-br from-slate-900 to-slate-900/50 border-emerald-900/30">
+                        <h2 className="text-emerald-500 font-bold mb-4 uppercase tracking-wider text-xs md:text-sm">Abstract</h2>
+                        <p className="text-base md:text-lg text-slate-300 leading-relaxed">
                             In preparation for potential international agreements on artificial intelligence, the development of verification infrastructure is vital. We propose a method for <strong className="text-white">fingerprinting AI cluster activity</strong> based on tapping network traffic in and out of the facility. These fingerprints enable an auditor (verifier) to retroactively challenge the original data. 
                         </p>
-                        <p className="mt-4 text-slate-400 leading-relaxed">
+                        <p className="mt-4 text-sm md:text-base text-slate-400 leading-relaxed">
                             Our goal is making it infeasibly expensive to carry out undisclosed workloads. We propose a retrofittable "Border Patrol" device that hashes/timestamps traffic and actively scrubs covert channels (analog modulation, timing, steganography). Our architecture eliminates the need for mutually trusted components by leveraging physics (optical taps) and coin-flip protocols.
                         </p>
                     </Card>
@@ -410,25 +428,25 @@
                     <ArchitectureViz />
 
                     {/* Intro Text */}
-                    <div className="prose prose-invert prose-slate max-w-none mb-16">
-                        <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
-                            <span className="text-emerald-500">01.</span> Introduction
+                    <div className="prose prose-invert prose-slate max-w-none mb-12 md:mb-16">
+                        <h2 className="text-xl md:text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                            <span className="text-emerald-500 font-mono">01.</span> Introduction
                         </h2>
-                        <p className="text-slate-400 mb-4">
+                        <p className="text-slate-400 text-sm md:text-base leading-relaxed mb-4">
                             The verification of artificial intelligence use under mutual distrust is an emerging field. We tackle the problem of <strong>comprehensiveness</strong> – verifying that workloads declared by a datacenter operator (the ‘Prover’) are <em>all</em> the workloads performed inside.
                         </p>
-                        <div className="grid md:grid-cols-2 gap-8 my-8">
-                            <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-800">
-                                <h3 className="text-white font-bold mb-2">The Problem</h3>
-                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-sm">
+                        <div className="grid md:grid-cols-2 gap-6 md:gap-8 my-8">
+                            <div className="bg-slate-900/50 p-5 md:p-6 rounded-xl border border-slate-800">
+                                <h3 className="text-white font-bold mb-2 text-sm md:text-base">The Problem</h3>
+                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-xs md:text-sm">
                                     <li>How can the verifier ensure they capture all traffic?</li>
                                     <li>How to prevent hiding information via steganography?</li>
                                     <li>How can the prover trust the device doesn't leak secrets?</li>
                                 </ul>
                             </div>
-                            <div className="bg-emerald-950/10 p-6 rounded-xl border border-emerald-900/30">
-                                <h3 className="text-emerald-400 font-bold mb-2">Our Solution</h3>
-                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-sm">
+                            <div className="bg-emerald-950/10 p-5 md:p-6 rounded-xl border border-emerald-900/30">
+                                <h3 className="text-emerald-400 font-bold mb-2 text-sm md:text-base">Our Solution</h3>
+                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-xs md:text-sm">
                                     <li>Capture raw evidence (hashes only) at the North-South link.</li>
                                     <li>Scrub unverifiable degrees of freedom (headers, timing).</li>
                                     <li>Root of trust in physics (Optical Taps), not supply chains.</li>
@@ -441,17 +459,17 @@
                     <WardenScrubber />
 
                     {/* Methods Text */}
-                    <div className="prose prose-invert prose-slate max-w-none mb-16">
-                        <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
-                            <span className="text-emerald-500">02.</span> Methods & Architecture
+                    <div className="prose prose-invert prose-slate max-w-none mb-12 md:mb-16">
+                        <h2 className="text-xl md:text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                            <span className="text-emerald-500 font-mono">02.</span> Methods & Architecture
                         </h2>
-                        <p className="text-slate-400 mb-6">
+                        <p className="text-slate-400 text-sm md:text-base leading-relaxed mb-6">
                             The Border Patrol device sits at the chokepoint of the datacenter. Every bit of traffic sent to the verifier (hashes only) can be passively observed by the prover using optical splitting. This ensures the prover knows exactly what evidence is being collected.
                         </p>
                         
-                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8">
-                            <h3 className="text-white font-bold mb-4">The Simulation Strategy</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 md:p-6 mb-8 overflow-hidden">
+                            <h3 className="text-white font-bold mb-4 text-sm md:text-base">The Simulation Strategy</h3>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-[11px] md:text-sm">
                                 <div className="p-4 bg-slate-950 rounded border border-slate-800">
                                     <span className="text-blue-400 font-mono block mb-2">01. Server</span>
                                     <p className="text-slate-500">Hosts JSON tokens simulating an LLM output stream.</p>
@@ -476,22 +494,22 @@
                     <VerificationDemo />
 
                     {/* Results Section */}
-                    <div className="mb-16">
-                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3">
-                            <span className="text-emerald-500">03.</span> Results & Detection
+                    <div className="mb-12 md:mb-16">
+                        <h2 className="text-xl md:text-2xl font-bold text-white mb-6 flex items-center gap-3">
+                            <span className="text-emerald-500 font-mono">03.</span> Results & Detection
                         </h2>
                         
                         <div className="grid gap-6">
                             <div className="bg-black rounded-xl border border-slate-800 overflow-hidden">
                                 <div className="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center gap-2">
                                     <div className="flex gap-1.5">
-                                        <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
-                                        <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
-                                        <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
+                                        <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-red-500/50"></div>
+                                        <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-yellow-500/50"></div>
+                                        <div className="w-2.5 h-2.5 md:w-3 md:h-3 rounded-full bg-green-500/50"></div>
                                     </div>
-                                    <span className="ml-2 text-xs font-mono text-slate-500">warden_simulation.py --stego=enabled</span>
+                                    <span className="ml-2 text-[10px] md:text-xs font-mono text-slate-500">warden_simulation.py --stego=enabled</span>
                                 </div>
-                                <div className="p-6 font-mono text-sm space-y-2">
+                                <div className="p-4 md:p-6 font-mono text-[10px] md:text-sm space-y-2 overflow-x-auto whitespace-nowrap md:whitespace-normal">
                                     <div className="flex gap-4">
                                         <span className="text-slate-500 select-none">00:01.234</span>
                                         <span className="text-blue-400">INFO</span>
@@ -507,27 +525,27 @@
                                         <span className="text-amber-500">ALERT</span>
                                         <span className="text-slate-300">Replay Hash Mismatch Detected!</span>
                                     </div>
-                                    <div className="pl-24 text-slate-500">
-                                        Expected: <span className="text-emerald-500">e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</span>
+                                    <div className="pl-16 md:pl-24 text-slate-500">
+                                        Expected: <span className="text-emerald-500 truncate inline-block max-w-[150px] md:max-w-none align-bottom">e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</span>
                                     </div>
-                                    <div className="pl-24 text-slate-500">
-                                        Actual: &nbsp;&nbsp;<span className="text-rose-500">f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2</span>
+                                    <div className="pl-16 md:pl-24 text-slate-500">
+                                        Actual: &nbsp;&nbsp;<span className="text-rose-500 truncate inline-block max-w-[150px] md:max-w-none align-bottom">f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2</span>
                                     </div>
                                 </div>
                             </div>
                             
-                            <p className="text-slate-400 text-sm mt-2">
+                            <p className="text-slate-400 text-xs md:text-sm mt-2 leading-relaxed">
                                 Above: Simulation output showing the detection of anomalous traffic. Even when the prover tries to hide data, the Warden's scrubbing ensures the resulting hash differs from the canonical replay hash.
                             </p>
                         </div>
                     </div>
 
                     {/* Footer */}
-                    <div className="border-t border-slate-800 pt-8 mt-12 flex flex-col md:flex-row justify-between items-center gap-4 text-slate-500 text-sm font-mono">
+                    <div className="border-t border-slate-800 pt-8 mt-12 flex flex-col md:flex-row justify-between items-center gap-6 text-slate-500 text-[10px] md:text-sm font-mono">
                         <div>
                             &copy; 2026
                         </div>
-                        <div className="flex gap-6">
+                        <div className="flex gap-4 md:gap-6">
                             <a href="https://github.com/derpyplops/warden" target="_blank" className="hover:text-emerald-400 transition-colors">Github Repo</a>
                             <a href="https://docs.google.com/document/d/1uK9qZ2vf2OeIxsG5mNF3tflkouA3EmjVXt5LIOAg0b8/edit?usp=sharing" target="_blank" className="hover:text-emerald-400 transition-colors">Paper Doc</a>
                         </div>
