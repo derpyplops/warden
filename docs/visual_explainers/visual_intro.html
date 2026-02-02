@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fingerprinting AI Cluster Usage</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #020617; /* Slate 950 */
+            color: #e2e8f0; /* Slate 200 */
+        }
+        
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .fade-in {
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
+        }
+
+        .packet-animation {
+            animation: flow 2s infinite linear;
+        }
+
+        @keyframes flow {
+            0% { transform: translateX(0); opacity: 0;}
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateX(100%); opacity: 0;}
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Icons ---
+        const Icon = ({ size = 20, className, children, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+                {children}
+            </svg>
+        );
+
+        const Shield = (p) => <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Icon>;
+        const Server = (p) => <Icon {...p}><rect x="2" y="2" width="20" height="8" rx="2" ry="2" /><rect x="2" y="14" width="20" height="8" rx="2" ry="2" /><line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" /></Icon>;
+        const Globe = (p) => <Icon {...p}><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Icon>;
+        const Eye = (p) => <Icon {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></Icon>;
+        const Lock = (p) => <Icon {...p}><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></Icon>;
+        const Activity = (p) => <Icon {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></Icon>;
+        const RefreshCw = (p) => <Icon {...p}><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></Icon>;
+        const ArrowRight = (p) => <Icon {...p}><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></Icon>;
+        const CheckCircle = (p) => <Icon {...p}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></Icon>;
+        const AlertTriangle = (p) => <Icon {...p}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></Icon>;
+
+        // --- Layout Components ---
+
+        const Card = ({ title, children, className = "", icon: IconComp }) => (
+            <div className={`bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl ${className}`}>
+                {title && (
+                    <div className="bg-slate-800/50 px-6 py-4 border-b border-slate-800 flex items-center gap-3">
+                        {IconComp && <IconComp className="text-emerald-500" />}
+                        <h3 className="font-bold text-lg text-slate-100">{title}</h3>
+                    </div>
+                )}
+                <div className="p-6">
+                    {children}
+                </div>
+            </div>
+        );
+
+        const Badge = ({ children, type = "default" }) => {
+            const colors = {
+                default: "bg-slate-800 text-slate-300",
+                success: "bg-emerald-900/30 text-emerald-400 border border-emerald-800",
+                warning: "bg-amber-900/30 text-amber-400 border border-amber-800",
+                danger: "bg-rose-900/30 text-rose-400 border border-rose-800"
+            };
+            return (
+                <span className={`px-2 py-1 rounded text-xs font-mono uppercase tracking-wider ${colors[type]}`}>
+                    {children}
+                </span>
+            );
+        };
+
+        // --- Interactive Modules ---
+
+        // 1. Architecture Visualization
+        const ArchitectureViz = () => {
+            const [packets, setPackets] = useState([]);
+            const [logs, setLogs] = useState([]);
+
+            const sendPacket = () => {
+                const id = Date.now();
+                setPackets(prev => [...prev, { id, stage: 0 }]);
+                
+                // Animate packet through stages
+                setTimeout(() => updatePacketStage(id, 1), 1000); // To Border Patrol
+                setTimeout(() => {
+                    updatePacketStage(id, 2); // Split to Verifier
+                    addLog(); 
+                }, 2000);
+                setTimeout(() => updatePacketStage(id, 3), 3000); // To Internet
+                setTimeout(() => removePacket(id), 4000);
+            };
+
+            const updatePacketStage = (id, stage) => {
+                setPackets(prev => prev.map(p => p.id === id ? { ...p, stage } : p));
+            };
+
+            const removePacket = (id) => {
+                setPackets(prev => prev.filter(p => p.id !== id));
+            };
+
+            const addLog = () => {
+                setLogs(prev => [`Hash: ${Math.random().toString(16).substr(2, 8)}...`, ...prev].slice(0, 3));
+            };
+
+            return (
+                <Card title="Concept: The Border Patrol Architecture" icon={Activity} className="mb-8">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 relative pt-48"> {/* Increased padding top for Verifier node */}
+                        {/* Nodes */}
+                        <div className="flex flex-col items-center z-10">
+                            <div className="w-24 h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700 shadow-[0_0_20px_rgba(30,41,59,0.5)]">
+                                <Server size={40} className="text-blue-400" />
+                            </div>
+                            <p className="mt-3 font-bold text-slate-200">AI Cluster</p>
+                            <p className="text-xs text-slate-500 uppercase">The Prover</p>
+                        </div>
+
+                        <div className="flex flex-col items-center relative z-10">
+                            {/* Verifier Entity (Moved Above) */}
+                            <div className="absolute -top-40 w-44 bg-slate-900 border-2 border-slate-700 p-3 rounded-xl text-xs font-mono shadow-2xl z-20">
+                                <div className="flex items-center gap-2 mb-2 text-indigo-400 font-bold border-b border-slate-800 pb-1 uppercase tracking-tight">
+                                    <Eye size={12}/> The Verifier
+                                </div>
+                                <div className="text-[10px] text-slate-500 mb-2 italic">Evidence Log (H+T)</div>
+                                <div className="space-y-1">
+                                    {logs.map((l, i) => <div key={i} className="text-emerald-500 opacity-90 truncate">{l}</div>)}
+                                    {logs.length === 0 && <span className="opacity-30">Waiting for tap...</span>}
+                                </div>
+                            </div>
+
+                            {/* Warden Node */}
+                            <div className="w-24 h-24 bg-emerald-950/30 rounded-2xl flex items-center justify-center border-2 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.2)] relative">
+                                <Shield size={40} className="text-emerald-400" />
+                                {/* Optical Tap Line - now going UP to separate the log */}
+                                <div className="absolute -top-16 w-1 h-16 bg-gradient-to-t from-emerald-500/50 via-emerald-500/30 to-slate-800/50 border-r border-dashed border-emerald-500/40"></div>
+                            </div>
+                            <p className="mt-3 font-bold text-emerald-400">Active Warden</p>
+                            <p className="text-xs text-emerald-600/70 uppercase">Border Patrol Hardware</p>
+                        </div>
+
+                        <div className="flex flex-col items-center z-10">
+                            <div className="w-24 h-24 bg-slate-800 rounded-2xl flex items-center justify-center border-2 border-slate-700">
+                                <Globe size={40} className="text-indigo-400" />
+                            </div>
+                            <p className="mt-3 font-bold text-slate-200">Internet</p>
+                            <p className="text-xs text-slate-500 uppercase">Public Users</p>
+                        </div>
+
+                        {/* Connection Lines (Relative to the pt-48 offset) */}
+                        <div className="absolute top-[232px] left-12 right-12 h-1 bg-slate-800 rounded -z-0"></div>
+
+                        {/* Moving Packets */}
+                        {packets.map(p => {
+                            let left = '10%';
+                            if (p.stage === 1) left = '50%';
+                            if (p.stage === 2) left = '50%'; 
+                            if (p.stage === 3) left = '90%';
+
+                            return (
+                                <div 
+                                    key={p.id}
+                                    className="absolute top-[224px] w-4 h-4 bg-white rounded-full shadow-[0_0_15px_white] transition-all duration-1000 ease-linear z-20"
+                                    style={{ left, transform: 'translateX(-50%)' }}
+                                />
+                            );
+                        })}
+                    </div>
+
+                    <div className="mt-12 flex justify-center">
+                        <button 
+                            onClick={sendPacket}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2 shadow-lg shadow-emerald-900/20 active:scale-95 transform duration-100"
+                        >
+                            <Activity size={18} /> Simulate Traffic Burst
+                        </button>
+                    </div>
+                </Card>
+            );
+        };
+
+        // 2. Warden Scrubbing Demo
+        const WardenScrubber = () => {
+            const [isScrubbed, setIsScrubbed] = useState(false);
+            const [hoveredField, setHoveredField] = useState(null);
+
+            const packetFields = [
+                { id: 'eth', label: 'ETHERNET', val: 'DST: 00:1A...', color: 'bg-slate-700' },
+                { id: 'ip_h', label: 'IP HEADER', val: isScrubbed ? 'ID: [RANDOM]' : 'ID: 0x4F2A (Secret?)', color: isScrubbed ? 'bg-emerald-600' : 'bg-rose-600', tooltip: 'The Warden randomizes IP IDs to prevent steganography.' },
+                { id: 'tcp', label: 'TCP SEQ', val: isScrubbed ? 'SEQ: [OFFSET]' : 'SEQ: 0x9912 (Secret?)', color: isScrubbed ? 'bg-emerald-600' : 'bg-rose-600', tooltip: 'Initial Sequence Numbers are offset to hide data.' },
+                { id: 'pay', label: 'PAYLOAD', val: '{"token": "AI"}', color: 'bg-blue-600', tooltip: 'Payloads are hashed for verification but passed through intact.' },
+                { id: 'pad', label: 'PADDING', val: isScrubbed ? 'ZEROS' : 'JUNK/DATA', color: isScrubbed ? 'bg-slate-600' : 'bg-rose-500', tooltip: 'Padding is zeroed out.' },
+            ];
+
+            return (
+                <Card title="Microarchitecture: The Active Warden" icon={Lock} className="mb-8">
+                    <div className="flex flex-col md:flex-row items-center gap-8 justify-between">
+                        <div className="flex-1 space-y-4">
+                            <p className="text-slate-400 text-sm leading-relaxed">
+                                The Warden acts as a sanitizing gateway. It takes "dirty" packets (potentially containing steganography in headers) and "scrubs" them. 
+                                Hover over the packet fields below to see what happens.
+                            </p>
+                            
+                            <div className="flex items-center gap-1 bg-black/40 p-4 rounded-xl border border-slate-800 overflow-x-auto">
+                                {packetFields.map(field => (
+                                    <div 
+                                        key={field.id}
+                                        onMouseEnter={() => setHoveredField(field)}
+                                        onMouseLeave={() => setHoveredField(null)}
+                                        className={`flex-shrink-0 w-24 h-20 ${field.color} rounded-lg flex flex-col items-center justify-center p-2 cursor-help transition-all duration-300 ${hoveredField?.id === field.id ? 'scale-105 ring-2 ring-white' : 'opacity-90'}`}
+                                    >
+                                        <span className="text-[10px] font-bold opacity-70 mb-1">{field.label}</span>
+                                        <span className="text-xs font-mono text-center leading-tight">{field.val}</span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="h-12 flex items-center">
+                                {hoveredField ? (
+                                    <div className="flex items-center gap-2 text-sm text-emerald-400 fade-in bg-emerald-950/30 px-3 py-2 rounded border border-emerald-900/50">
+                                        <Shield size={16} /> {hoveredField.tooltip}
+                                    </div>
+                                ) : (
+                                    <span className="text-slate-600 text-sm italic">Hover packet segments for details...</span>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col items-center gap-4 min-w-[200px] border-l border-slate-800 pl-8">
+                            <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-500 ${isScrubbed ? 'bg-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.4)]' : 'bg-slate-700'}`}>
+                                <RefreshCw size={32} className={`text-white transition-transform duration-700 ${isScrubbed ? 'rotate-180' : ''}`} />
+                            </div>
+                            <button 
+                                onClick={() => setIsScrubbed(!isScrubbed)}
+                                className={`px-6 py-2 rounded-lg font-bold transition-all w-full border ${isScrubbed ? 'bg-slate-800 border-emerald-500 text-emerald-400' : 'bg-emerald-600 border-transparent text-white hover:bg-emerald-500'}`}
+                            >
+                                {isScrubbed ? 'Reset Warden' : 'Activate Scrubbing'}
+                            </button>
+                            <span className="text-xs text-slate-500 uppercase font-mono">{isScrubbed ? 'Traffic: Reproducible' : 'Traffic: Dirty'}</span>
+                        </div>
+                    </div>
+                </Card>
+            );
+        };
+
+        // 3. Verification Hasher
+        const VerificationDemo = () => {
+            const [proverText, setProverText] = useState('{"prompt": "Summarize the report"}');
+            const [verifierText, setVerifierText] = useState('{"prompt": "Summarize the report"}');
+            
+            const simpleHash = (str) => {
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    const char = str.charCodeAt(i);
+                    hash = (hash << 5) - hash + char;
+                    hash = hash & hash;
+                }
+                return Math.abs(hash).toString(16).padStart(8, '0');
+            };
+
+            const pHash = simpleHash(proverText);
+            const vHash = simpleHash(verifierText);
+            const match = pHash === vHash;
+
+            return (
+                <Card title="The Replay Check" icon={CheckCircle} className="mb-8">
+                    <p className="mb-6 text-slate-400">
+                        The Verifier replays the declared workload and compares the hash of the traffic. 
+                        Try editing the payload below. If the Prover hides data (steganography), the traffic changes, the hash changes, and verification fails.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase">Prover (Datacenter)</label>
+                            <textarea 
+                                value={proverText}
+                                onChange={(e) => setProverText(e.target.value)}
+                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <div className="flex items-center justify-between bg-slate-800 p-3 rounded-lg border border-slate-700">
+                                <span className="text-xs text-slate-500">Hash Output</span>
+                                <span className="font-mono text-emerald-400 font-bold">{pHash}</span>
+                            </div>
+                        </div>
+
+                        <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-500 uppercase">Verifier (Replay)</label>
+                            <textarea 
+                                value={verifierText}
+                                onChange={(e) => setVerifierText(e.target.value)}
+                                className="w-full h-32 bg-slate-950 border border-slate-700 rounded-lg p-3 font-mono text-sm text-slate-300 focus:outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <div className="flex items-center justify-between bg-slate-800 p-3 rounded-lg border border-slate-700">
+                                <span className="text-xs text-slate-500">Hash Output</span>
+                                <span className="font-mono text-blue-400 font-bold">{vHash}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className={`mt-6 p-4 rounded-xl border flex items-center justify-center gap-3 transition-colors duration-500 ${match ? 'bg-emerald-900/20 border-emerald-800/50' : 'bg-rose-900/20 border-rose-800/50'}`}>
+                        {match ? (
+                            <>
+                                <CheckCircle className="text-emerald-500" size={24} />
+                                <span className="text-emerald-400 font-bold text-lg">Verification Successful: Hashes Match</span>
+                            </>
+                        ) : (
+                            <>
+                                <AlertTriangle className="text-rose-500" size={24} />
+                                <span className="text-rose-400 font-bold text-lg">Mismatch Detected: Potential Covert Activity</span>
+                            </>
+                        )}
+                    </div>
+                </Card>
+            );
+        };
+
+        // --- Main App ---
+
+        const App = () => {
+            return (
+                <div className="max-w-5xl mx-auto px-6 py-12 md:py-20">
+                    
+                    {/* Header */}
+                    <div className="mb-16 fade-in">
+                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-900/30 text-emerald-400 border border-emerald-800/50 text-xs font-mono mb-6">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                            ACTIVE MONITORING PROTOCOL
+                        </div>
+                        <h1 className="text-4xl md:text-6xl font-extrabold text-white tracking-tight leading-tight mb-6">
+                            Fingerprinting of All AI Cluster Usage <span className="text-slate-600 block text-2xl md:text-3xl mt-2 font-semibold">Without Mutually Trusted Hardware</span>
+                        </h1>
+                        <div className="flex flex-wrap gap-4 text-slate-400 text-sm font-mono mt-8">
+                            <a href="https://nacicankaya.substack.com/" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
+                                <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">NC</div> Naci Cankaya
+                            </a>
+                            <a href="https://www.safer-ai.org/about/jakub-krys" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
+                                <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">JK</div> Jakub Kryś
+                            </a>
+                            <a href="https://www.linkedin.com/in/jonathan-ng-7061a3162/" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
+                                <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">JN</div> Jonathan Ng
+                            </a>
+                            <a href="https://lukemarks.bot/" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
+                                <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">LM</div> Luke Marks
+                            </a>
+                            <a href="https://www.felix-krueckel.com/" target="_blank" className="flex items-center gap-2 hover:text-emerald-400 transition-colors">
+                                <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white font-bold">FK</div> Felix Krückel
+                            </a>
+                            <span className="text-slate-600 ml-2 border-l border-slate-800 pl-4">With Apart Research</span>
+                        </div>
+                    </div>
+
+                    {/* Abstract */}
+                    <Card className="mb-16 bg-gradient-to-br from-slate-900 to-slate-900/50 border-emerald-900/30">
+                        <h2 className="text-emerald-500 font-bold mb-4 uppercase tracking-wider text-sm">Abstract</h2>
+                        <p className="text-lg text-slate-300 leading-relaxed">
+                            In preparation for potential international agreements on artificial intelligence, the development of verification infrastructure is vital. We propose a method for <strong className="text-white">fingerprinting AI cluster activity</strong> based on tapping network traffic in and out of the facility. These fingerprints enable an auditor (verifier) to retroactively challenge the original data. 
+                        </p>
+                        <p className="mt-4 text-slate-400 leading-relaxed">
+                            Our goal is making it infeasibly expensive to carry out undisclosed workloads. We propose a retrofittable "Border Patrol" device that hashes/timestamps traffic and actively scrubs covert channels (analog modulation, timing, steganography). Our architecture eliminates the need for mutually trusted components by leveraging physics (optical taps) and coin-flip protocols.
+                        </p>
+                    </Card>
+
+                    {/* Interactive Section 1 */}
+                    <ArchitectureViz />
+
+                    {/* Intro Text */}
+                    <div className="prose prose-invert prose-slate max-w-none mb-16">
+                        <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                            <span className="text-emerald-500">01.</span> Introduction
+                        </h2>
+                        <p className="text-slate-400 mb-4">
+                            The verification of artificial intelligence use under mutual distrust is an emerging field. We tackle the problem of <strong>comprehensiveness</strong> – verifying that workloads declared by a datacenter operator (the ‘Prover’) are <em>all</em> the workloads performed inside.
+                        </p>
+                        <div className="grid md:grid-cols-2 gap-8 my-8">
+                            <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-800">
+                                <h3 className="text-white font-bold mb-2">The Problem</h3>
+                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-sm">
+                                    <li>How can the verifier ensure they capture all traffic?</li>
+                                    <li>How to prevent hiding information via steganography?</li>
+                                    <li>How can the prover trust the device doesn't leak secrets?</li>
+                                </ul>
+                            </div>
+                            <div className="bg-emerald-950/10 p-6 rounded-xl border border-emerald-900/30">
+                                <h3 className="text-emerald-400 font-bold mb-2">Our Solution</h3>
+                                <ul className="list-disc list-inside text-slate-400 space-y-2 text-sm">
+                                    <li>Capture raw evidence (hashes only) at the North-South link.</li>
+                                    <li>Scrub unverifiable degrees of freedom (headers, timing).</li>
+                                    <li>Root of trust in physics (Optical Taps), not supply chains.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Interactive Section 2 */}
+                    <WardenScrubber />
+
+                    {/* Methods Text */}
+                    <div className="prose prose-invert prose-slate max-w-none mb-16">
+                        <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-3">
+                            <span className="text-emerald-500">02.</span> Methods & Architecture
+                        </h2>
+                        <p className="text-slate-400 mb-6">
+                            The Border Patrol device sits at the chokepoint of the datacenter. Every bit of traffic sent to the verifier (hashes only) can be passively observed by the prover using optical splitting. This ensures the prover knows exactly what evidence is being collected.
+                        </p>
+                        
+                        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8">
+                            <h3 className="text-white font-bold mb-4">The Simulation Strategy</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
+                                <div className="p-4 bg-slate-950 rounded border border-slate-800">
+                                    <span className="text-blue-400 font-mono block mb-2">01. Server</span>
+                                    <p className="text-slate-500">Hosts JSON tokens simulating an LLM output stream.</p>
+                                </div>
+                                <div className="p-4 bg-slate-950 rounded border border-slate-800">
+                                    <span className="text-blue-400 font-mono block mb-2">02. Client</span>
+                                    <p className="text-slate-500">Requests data (the User). Can simulate covert triggers.</p>
+                                </div>
+                                <div className="p-4 bg-slate-950 rounded border border-slate-800">
+                                    <span className="text-emerald-400 font-mono block mb-2">03. Warden</span>
+                                    <p className="text-slate-500">Intercepts packets. Scrubs headers. Normalizes timing.</p>
+                                </div>
+                                <div className="p-4 bg-slate-950 rounded border border-slate-800">
+                                    <span className="text-indigo-400 font-mono block mb-2">04. Verifier</span>
+                                    <p className="text-slate-500">Replays request. Hashes traffic. Compares with Log.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Interactive Section 3 */}
+                    <VerificationDemo />
+
+                    {/* Results Section */}
+                    <div className="mb-16">
+                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-3">
+                            <span className="text-emerald-500">03.</span> Results & Detection
+                        </h2>
+                        
+                        <div className="grid gap-6">
+                            <div className="bg-black rounded-xl border border-slate-800 overflow-hidden">
+                                <div className="bg-slate-900 px-4 py-2 border-b border-slate-800 flex items-center gap-2">
+                                    <div className="flex gap-1.5">
+                                        <div className="w-3 h-3 rounded-full bg-red-500/50"></div>
+                                        <div className="w-3 h-3 rounded-full bg-yellow-500/50"></div>
+                                        <div className="w-3 h-3 rounded-full bg-green-500/50"></div>
+                                    </div>
+                                    <span className="ml-2 text-xs font-mono text-slate-500">warden_simulation.py --stego=enabled</span>
+                                </div>
+                                <div className="p-6 font-mono text-sm space-y-2">
+                                    <div className="flex gap-4">
+                                        <span className="text-slate-500 select-none">00:01.234</span>
+                                        <span className="text-blue-400">INFO</span>
+                                        <span className="text-slate-300">Traffic Capture Started on Interface eth0</span>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <span className="text-slate-500 select-none">00:01.450</span>
+                                        <span className="text-emerald-400">WARDEN</span>
+                                        <span className="text-slate-300">Scrubbing volatile fields (IP_ID, TCP_SEQ)...</span>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        <span className="text-slate-500 select-none">00:02.100</span>
+                                        <span className="text-amber-500">ALERT</span>
+                                        <span className="text-slate-300">Replay Hash Mismatch Detected!</span>
+                                    </div>
+                                    <div className="pl-24 text-slate-500">
+                                        Expected: <span className="text-emerald-500">e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855</span>
+                                    </div>
+                                    <div className="pl-24 text-slate-500">
+                                        Actual: &nbsp;&nbsp;<span className="text-rose-500">f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <p className="text-slate-400 text-sm mt-2">
+                                Above: Simulation output showing the detection of anomalous traffic. Even when the prover tries to hide data, the Warden's scrubbing ensures the resulting hash differs from the canonical replay hash.
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="border-t border-slate-800 pt-8 mt-12 flex flex-col md:flex-row justify-between items-center gap-4 text-slate-500 text-sm font-mono">
+                        <div>
+                            &copy; 2026
+                        </div>
+                        <div className="flex gap-6">
+                            <a href="https://github.com/derpyplops/warden" target="_blank" className="hover:text-emerald-400 transition-colors">Github Repo</a>
+                            <a href="https://docs.google.com/document/d/1uK9qZ2vf2OeIxsG5mNF3tflkouA3EmjVXt5LIOAg0b8/edit?usp=sharing" target="_blank" className="hover:text-emerald-400 transition-colors">Paper Doc</a>
+                        </div>
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
