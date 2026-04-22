@@ -16,6 +16,11 @@
 % Blind review mode. Flip to [preprint] or [accepted] post-review.
 \usepackage{icml2026}
 
+% Suppress the review-mode line-number ruler in the left margin.
+\makeatletter
+\def\icmlruler#1{}
+\makeatother
+
 \icmltitlerunning{Fingerprinting AI Cluster I/O Without Trusted Processors}
 
 \begin{document}
