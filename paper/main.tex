@@ -55,7 +55,7 @@
 ]
 
 \printAffiliationsAndNotice{}
-% Research conducted at the Technical AI Governance Challenge, 2026.
+% Research conducted at the Apart Technical AI Governance Challenge, 2026.
 
 \begin{abstract}
 In preparation for potential international agreements on artificial intelligence, the development of verification infrastructure for AI datacenters is vital. We propose a method for cryptographically committing all information entering and leaving a datacenter: Hashes are computed by network taps placed on all the information-carrying wires between the cluster and the outside world, enabling an auditor to retroactively challenge the preimage data to be sent to a privacy-preserving verification facility performing compliance checks. Our goal is to make it infeasible to covertly exfiltrate the results of undisclosed workloads in the cluster through the tapped wires. To this end, we specify the architecture of a ``Secure Gateway Device'', which handles the erasure of covert channels that post-hoc verification on hashed data cannot address: Analog and timing side-channels, as well as steganography in network protocol headers. The architecture eliminates the need for any processors trusted by both the Prover and the Verifier, leveraging passive optical fiber splitters and coin-flip protocols for random number generation where needed. We expect development costs of a demonstration device to be roughly equivalent to the cost of a small team of engineers for a few months, with a comparatively small bill of materials.
@@ -79,7 +79,7 @@ Consequently, the field of AI Verification has recently emerged as a research ag
 
 In this work, our main focus is Subgoal 2A of \citet{baker2025verifying}, which can be summarised as follows: an entity operating a computing cluster --- the Prover --- aims to prove to the auditing party --- the Verifier --- that no undeclared workloads were executed on said cluster. The Verifier checks if the evidence was generated in a way the Prover can not tamper with.
 
-We do not engage with the problem of determining which workloads should be allowed or not in the first place (regulation) or of verifying whether the declared workloads are compliant (Subgoal~1B). However, our proposed method offers raw evidence of compute use, which is needed for the downstream verification of correctness (Subgoal~1A) and compliance (Subgoal~1B). The issue of preventing undeclared compute resources (Subgoal~2B) is fully outside of the scope of this work.
+We do not engage with the problem of determining which workloads should be allowed or not in the first place (regulation) or of verifying whether the declared workloads are compliant (Subgoal~1B). However, our proposed method offers raw evidence of compute use, which is needed for the downstream verification of correctness (Subgoal~1A) and compliance (Subgoal~1B). The issue of \textit{preventing undeclared compute resources} (Subgoal~2B) is fully outside of the scope of this work.
 
 Most solutions for verifying compliance and comprehensiveness proposed so far focus on mechanisms that can be fitted inside or around hardware accelerators~\cite{aarne2024chips}. These include devices such as Trusted Execution Environments, HBM-based chiplets that monitor traffic in and out of the memory stacks~\cite{petrie2025guaranteeable} and tamper-proof enclosures to house the accelerators~\cite{happel2026tampersec}\footnote{For a thorough overview of possible directions, we refer the reader to the three-part series by the FlexHEG initiative~\cite{petrie2025flexheg}.}. Instead of targeting individual accelerators or servers, in this paper we operate at the level of the whole cluster. In particular, we focus on the communication chokepoint between the hardware and the Prover: the datacenter north-south uplink (connecting the datacenter's clusters with the internet/outside world). If the Verifier can capture, hash and timestamp all traffic in and out of the datacenter, and the Prover can --- upon later request --- demonstrate that their declared workloads correspond to this hashed traffic, the Verifier can be satisfied that the Prover is not performing undeclared computations in the cluster. To achieve this goal, we propose a schematic design of a ``Secure Gateway Device'' (SGD) that uses active and passive network taps to capture and process such traffic for later verification in a mutually trusted manner.
 
@@ -205,7 +205,7 @@ An important part of sanitization is re-timing: even after header sanitization, 
 
 We consider only covert channels through the SGD in scope. Physical air-gapping of the monitored cluster is a requirement, but a separate challenge.
 
-Making exfiltration of even single bits outright impossible is likely futile, as extremely low-bandwidth covert channels are inherently offense-dominant. The residual risk is not bulk data exfiltration (practically all meaningful computation output far exceeds what very low bandwidth channels can carry), but rather the combination of covert internal computation with minimal-bandwidth signalling of results. Defending against this requires complementary verification of compute utilisation (e.g.\ backend/east-west network taps, throughput accounting, numerical fingerprinting~\cite{cankaya2025catching1}, etc.), which is outside the scope of the SGD.
+Making exfiltration of even single bits outright impossible is likely futile, as very low-bandwidth covert channels are inherently offense-dominant. The residual risk is not bulk data exfiltration (practically all meaningful computation output far exceeds what very low bandwidth channels can carry), but rather the combination of covert internal computation with minimal-bandwidth signalling of results. Defending against this requires complementary verification of compute utilisation (e.g.\ backend/east-west network taps, throughput accounting, numerical fingerprinting~\cite{cankaya2025catching1}, etc.), which is outside the scope of the SGD.
 
 After the mitigations achieved via the Active Warden within the SGD, we expect the following residual channels to remain:
 \begin{itemize}
@@ -253,7 +253,7 @@ The whole architecture depends on the assumption that the SGD is the only commun
 
 Until solutions for imperfect reproducibility of ML outputs are found, steganography in output payloads dominates all other residual channels by orders of magnitude, making it the primary target for follow-on work.
 
-We do not constrain bandwidth for covert communication into the datacenter. While the input data has many uncontrollable variables (media input, user prompts, etc.), input Wardens may re-write such information while preserving semantics. We leave this to future work. Threat modeling for very low outbound bandwidth --- but still impactful --- covert workloads in the datacenter would further provide (or negate) motivation for such additional traffic sanitization.
+We do not constrain bandwidth for covert communication \textit{into} the datacenter. While the input data has many uncontrollable variables (media input, user prompts, etc.), input Wardens may re-write such information while preserving semantics. We leave this to future work. Threat modeling for very low outbound bandwidth --- but still impactful --- covert workloads in the datacenter would further provide (or negate) motivation for such additional traffic sanitization.
 
 Development and testing of network taps for backend traffic within the datacenter can add defense in depth on top of air-gapping and combating covert channels through the SGD.
 
@@ -266,7 +266,7 @@ A key property of our design is that it removes the need for processors trusted 
 
 Our feasibility analysis suggests that the approach scales to clusters of 100k+ accelerators using commercially available hardware: FPGA-based network taps and hash processors, off-the-shelf optical components, and storage volumes that represent a negligible fraction of modern datacenter costs. The individual building blocks --- traffic scrubbing, passive optical tapping, hardware hashing --- are already deployed in adversarial settings such as financial regulation and military networks.
 
-For now, the core remaining challenge is that steganography in ML output payloads represents a significant residual covert channel, with a worst-case bandwidth of tens of Mbit/s for a fully utilised cluster. Closing this channel depends on progress in deterministic inference replay or active scrubbing of hardware-induced entropy in token likelihoods, both of which are active areas of research. Other residual channels --- timing modulation through connection lifecycle events and information encoded in faked hardware failures --- offer an adversarial Prover a much lower bandwidth. Additionally, the entire architecture rests on the assumption that the SGD is the only communication path out of the facility, which requires robust physical monitoring that we do not address.
+For now, the core remaining challenge is that steganography in ML output payloads represents a significant residual covert channel, with a worst-case bandwidth of tens of Mbit/s for a fully utilised cluster. Closing this channel depends on progress in deterministic inference replay or active scrubbing of hardware-induced entropy in token likelihoods, both of which are active areas of research. Other residual channels --- timing modulation through connection lifecycle events and information encoded in faked hardware failures --- offer an adversarial Prover a much lower bandwidth. Additionally, the entire architecture rests on the assumption that the SGD is the \textit{only} communication path out of the facility, which requires robust physical monitoring that we do not address.
 
 We encourage the community to pursue a hardware demonstration of the SGD, which we expect to be inexpensive relative to the human engineering effort involved. Given the pace of AI capability development and the growing interest in international agreements, verification infrastructure of this kind may be needed sooner than the policy frameworks it is meant to support.
 
@@ -275,6 +275,9 @@ We encourage the community to pursue a hardware demonstration of the SGD, which 
 
 \newpage
 \appendix
+\crefalias{section}{appendix}
+\Crefname{appendix}{Appendix}{Appendices}
+\crefname{appendix}{appendix}{appendices}
 \onecolumn
 
 \section{Prover's Verification Mechanism}
@@ -332,7 +335,7 @@ Additionally, the Prover needs to maintain a year-long record of all plaintext d
 
 The cost of storing such a large amount of data is small ($<1\%$) compared to the costs of AI datacenters at the scale considered here: a typical price for a 28~TB HDD hard drive is around 500\euro\footnote{As of early 2026.}, thus the full cost amounts to $1{,}260~\text{PB}/28~\text{TB} \times 500\text{\euro} \sim 22{,}500{,}000$~\euro.
 
-Note that all these estimates represent a pessimistic upper bound that arises from extremely inefficient data management. When using non-streaming APIs, multiple tokens are included as part of one chat completion template. Further, multiple such templates could be transmitted as part of a single Ethernet frame, as long as the total payload size does not exceed the standard Ethernet MTU of 1500 bytes. Storing API JSON files for each token is also likely unnecessary when they can be reconstructed from tokens and heuristics. We also did not include data compression at all. Finally, we do not need to compute the hash of each Ethernet frame. Instead, the `fundamental unit' of verification could be an arbitrarily long chain of frames. All these modifications could reduce storage by multiple orders of magnitude.
+Note that all these estimates represent a pessimistic upper bound that arises from \textit{extremely} inefficient data management. When using non-streaming APIs, multiple tokens are included as part of one chat completion template. Further, multiple such templates could be transmitted as part of a single Ethernet frame, as long as the total payload size does not exceed the standard Ethernet MTU of 1500 bytes. Storing API JSON files for each token is also likely unnecessary when they can be reconstructed from tokens and heuristics. We also did not include data compression at all. Finally, we do not need to compute the hash of each Ethernet frame. Instead, the `fundamental unit' of verification could be an arbitrarily long chain of frames. All these modifications could reduce storage by multiple orders of magnitude.
 
 \section{Preventing Dictionary Attacks}
 \label{app:dictionary}
